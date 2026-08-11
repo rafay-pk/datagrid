@@ -594,7 +594,7 @@ export function CanvasWorkspace({
               onPointerDown={(event) => {
                 if (event.button !== 0) return;
                 const target = event.target as HTMLElement;
-                const interactive = target.closest("button, a, input, textarea, select, [contenteditable='true'], .resize-handle");
+                const interactive = target.closest("button, a, input, textarea, select, [contenteditable='true'], .resize-handle, .text-toolbar");
                 const readOnlySheetCell = card.type === "spreadsheet" && !sheetFocused && target.closest(".sheet-cell");
                 if (interactive && !readOnlySheetCell) return;
                 event.stopPropagation();

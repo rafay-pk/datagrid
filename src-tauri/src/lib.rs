@@ -121,6 +121,7 @@ fn render_runs(runs: &[Value]) -> String {
             let text = escape_xml(run.get("text").and_then(Value::as_str).unwrap_or(""));
             let bold = run.get("bold").and_then(Value::as_bool).unwrap_or(false);
             let italic = run.get("italic").and_then(Value::as_bool).unwrap_or(false);
+            let underline = run.get("underline").and_then(Value::as_bool).unwrap_or(false);
             let href = run.get("href").and_then(Value::as_str);
             let mut value = text;
             if bold || italic {
@@ -130,6 +131,9 @@ fn render_runs(runs: &[Value]) -> String {
                     _ => "Italic",
                 };
                 value = format!("<text:span text:style-name=\"{style}\">{value}</text:span>");
+            }
+            if underline {
+                value = format!("<text:span text:style-name=\"Underline\">{value}</text:span>");
             }
             if let Some(link) = href {
                 value = format!(
@@ -176,6 +180,11 @@ fn render_text_card(card: &Value) -> String {
             "heading" => output.push_str(&format!("<text:h text:outline-level=\"1\">{rendered}</text:h>")),
             "unordered-item" | "ordered-item" => {
                 output.push_str(&format!("<text:list-item><text:p>{rendered}</text:p></text:list-item>"));
+            }
+            "checklist-item" => {
+                let checked = block.get("checked").and_then(Value::as_bool).unwrap_or(false);
+                let mark = if checked { "\u{2611}" } else { "\u{2610}" };
+                output.push_str(&format!("<text:p>{mark} {rendered}</text:p>"));
             }
             _ => output.push_str(&format!("<text:p>{rendered}</text:p>")),
         }
@@ -236,7 +245,7 @@ fn spreadsheet_content(card: &Value) -> String {
 
 fn basic_styles(font: &str) -> String {
     format!(r#"<?xml version="1.0" encoding="UTF-8"?>
-<office:document-styles xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" office:version="1.3"><office:font-face-decls><style:font-face style:name="DatagridFont" svg:font-family="{}"/></office:font-face-decls><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="DatagridFont"/></style:default-style><style:style style:name="Bold" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style><style:style style:name="Italic" style:family="text"><style:text-properties fo:font-style="italic"/></style:style><style:style style:name="BoldItalic" style:family="text"><style:text-properties fo:font-weight="bold" fo:font-style="italic"/></style:style><text:list-style style:name="BulletList"><text:list-level-style-bullet text:level="1" text:bullet-char="•"/></text:list-style><text:list-style style:name="NumberList"><text:list-level-style-number text:level="1" style:num-format="1"/></text:list-style></office:styles></office:document-styles>"#, escape_xml(font))
+<office:document-styles xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" office:version="1.3"><office:font-face-decls><style:font-face style:name="DatagridFont" svg:font-family="{}"/></office:font-face-decls><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="DatagridFont"/></style:default-style><style:style style:name="Bold" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style><style:style style:name="Italic" style:family="text"><style:text-properties fo:font-style="italic"/></style:style><style:style style:name="BoldItalic" style:family="text"><style:text-properties fo:font-weight="bold" fo:font-style="italic"/></style:style><style:style style:name="Underline" style:family="text"><style:text-properties style:text-underline-style="solid" style:text-underline-width="auto" style:text-underline-color="font-color"/></style:style><text:list-style style:name="BulletList"><text:list-level-style-bullet text:level="1" text:bullet-char="•"/></text:list-style><text:list-style style:name="NumberList"><text:list-level-style-number text:level="1" style:num-format="1"/></text:list-style></office:styles></office:document-styles>"#, escape_xml(font))
 }
 
 fn build_odt(document: &Value) -> Result<Vec<u8>, String> {

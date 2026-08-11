@@ -45,3 +45,8 @@ export const CheckIcon = (props: IconProps) => <IconBase {...props}><path d="m5 
 export const XIcon = (props: IconProps) => <IconBase {...props}><path d="m6 6 12 12M18 6 6 18"/></IconBase>;
 export const SearchIcon = (props: IconProps) => <IconBase {...props}><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></IconBase>;
 export const DiceIcon = (props: IconProps) => <IconBase {...props}><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8" cy="8" r="1" fill="currentColor"/><circle cx="16" cy="8" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="8" cy="16" r="1" fill="currentColor"/><circle cx="16" cy="16" r="1" fill="currentColor"/></IconBase>;
+export const BoldIcon = (props: IconProps) => <IconBase {...props}><path d="M7 4h6a4 4 0 0 1 0 8H7z"/><path d="M7 12h7a4 4 0 0 1 0 8H7z"/></IconBase>;
+export const UnderlineIcon = (props: IconProps) => <IconBase {...props}><path d="M6 4v7a6 6 0 0 0 12 0V4M4 20h16"/></IconBase>;
+export const BulletListIcon = (props: IconProps) => <IconBase {...props}><path d="M9 6h12M9 12h12M9 18h12"/><circle cx="4" cy="6" r="1.4" fill="currentColor"/><circle cx="4" cy="12" r="1.4" fill="currentColor"/><circle cx="4" cy="18" r="1.4" fill="currentColor"/></IconBase>;
+export const NumberedListIcon = (props: IconProps) => <IconBase {...props}><path d="M9 6h12M9 12h12M9 18h12"/><path d="M4 4.5h1.3v3.5M4 8h1.6"/><path d="M4 12.5c0-.7.6-1 1.1-1s1.1.3 1.1 1-1.1 1.1-2.2 2.5h2.3"/></IconBase>;
+export const ChecklistIcon = (props: IconProps) => <IconBase {...props}><path d="M3.5 6l1.3 1.3L7.5 4.5"/><path d="M10 6h11"/><path d="M3.5 14l1.3 1.3 2.7-2.8"/><path d="M10 14h11"/></IconBase>;

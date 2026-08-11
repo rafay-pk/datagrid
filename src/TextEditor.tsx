@@ -1,6 +1,7 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { blocksFromHtml, normalizeUrl } from "./textFormat";
 import type { TextBlock } from "./types";
+import { BoldIcon, BulletListIcon, ChecklistIcon, NumberedListIcon, UnderlineIcon } from "./icons";
 
 interface TextEditorProps {
   html: string;
@@ -28,6 +29,21 @@ function placeCursorAtEnd(element: HTMLElement): void {
   const selection = window.getSelection();
   selection?.removeAllRanges();
   selection?.addRange(range);
+}
+
+function createChecklistMarker(): HTMLSpanElement {
+  const marker = document.createElement("span");
+  marker.className = "checklist-marker";
+  marker.setAttribute("contenteditable", "false");
+  return marker;
+}
+
+function createChecklistItem(): HTMLLIElement {
+  const item = document.createElement("li");
+  item.dataset.checked = "false";
+  item.appendChild(createChecklistMarker());
+  item.appendChild(document.createElement("br"));
+  return item;
 }
 
 function maybeTransformMarker(editor: HTMLElement): void {
@@ -60,13 +76,45 @@ function maybeTransformMarker(editor: HTMLElement): void {
     list.appendChild(item);
     block.replaceWith(list);
     placeCursorAtEnd(item);
+  } else if (text === "[] " || text === "[ ] ") {
+    const list = document.createElement("ul");
+    list.className = "checklist";
+    const item = createChecklistItem();
+    list.appendChild(item);
+    block.replaceWith(list);
+    placeCursorAtEnd(item);
+  }
+}
+
+function toggleChecklist(editor: HTMLElement): void {
+  let block = selectionBlock();
+  if (!block || !editor.contains(block)) return;
+
+  const currentList = block.closest("ul, ol");
+  if (currentList?.classList.contains("checklist")) {
+    block.closest("li")?.querySelector(".checklist-marker")?.remove();
+    document.execCommand("insertUnorderedList");
+    return;
+  }
+  if (currentList) document.execCommand(currentList.tagName === "OL" ? "insertOrderedList" : "insertUnorderedList");
+  document.execCommand("insertUnorderedList");
+
+  block = selectionBlock();
+  const list = block?.closest("ul");
+  if (!list) return;
+  list.classList.add("checklist");
+  for (const item of Array.from(list.children)) {
+    if (item instanceof HTMLLIElement && !item.querySelector(".checklist-marker")) {
+      item.dataset.checked = item.dataset.checked ?? "false";
+      item.insertBefore(createChecklistMarker(), item.firstChild);
+    }
   }
 }
 
 function sanitizeClipboardHtml(html: string): string {
   const template = document.createElement("template");
   template.innerHTML = html;
-  const allowed = new Set(["DIV", "P", "BR", "STRONG", "B", "EM", "I", "A", "UL", "OL", "LI", "H1", "H2"]);
+  const allowed = new Set(["DIV", "P", "BR", "STRONG", "B", "EM", "I", "U", "A", "UL", "OL", "LI", "H1", "H2"]);
   for (const element of Array.from(template.content.querySelectorAll("*"))) {
     if (!allowed.has(element.tagName)) {
       element.replaceWith(...Array.from(element.childNodes));
@@ -84,6 +132,7 @@ function sanitizeClipboardHtml(html: string): string {
 export function TextEditor({ html, onChange, onFocus, onMeasure }: TextEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   const measureFrameRef = useRef<number | null>(null);
+  const [toolbarVisible, setToolbarVisible] = useState(false);
 
   const measure = () => {
     const editor = editorRef.current;
@@ -128,93 +177,131 @@ export function TextEditor({ html, onChange, onFocus, onMeasure }: TextEditorPro
     });
   };
 
+  const runCommand = (command: string) => {
+    editorRef.current?.focus({ preventScroll: true });
+    document.execCommand(command);
+    emitChange();
+  };
+
+  const runChecklistToggle = () => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.focus({ preventScroll: true });
+    toggleChecklist(editor);
+    emitChange();
+  };
+
   return (
-    <div
-      ref={editorRef}
-      className="text-editor"
-      contentEditable
-      role="textbox"
-      tabIndex={0}
-      suppressContentEditableWarning
-      data-placeholder="Write something…"
-      spellCheck
-      onFocus={onFocus}
-      onPointerDown={(event) => {
-        if (event.button !== 0) return;
-        event.stopPropagation();
-        editorRef.current?.focus({ preventScroll: true });
-        onFocus();
-      }}
-      onInput={emitChange}
-      onKeyDown={(event) => {
-        if ((event.ctrlKey || event.metaKey) && ["b", "i"].includes(event.key.toLowerCase())) {
-          event.preventDefault();
-          document.execCommand(event.key.toLowerCase() === "b" ? "bold" : "italic");
-          emitChange();
-          return;
-        }
-        if (event.key === "Tab" && !(event.ctrlKey || event.metaKey) && selectionBlock()?.closest("li")) {
-          event.preventDefault();
-          document.execCommand(event.shiftKey ? "outdent" : "indent");
-          emitChange();
-        }
-        if (event.key === "Enter") {
-          const block = selectionBlock();
-          const listItem = block?.closest("li");
-          if (listItem) {
+    <>
+      {toolbarVisible && (
+        <div className="text-toolbar" onMouseDown={(event) => event.preventDefault()}>
+          <button type="button" title="Bold (Ctrl+B)" onClick={() => runCommand("bold")}><BoldIcon size={14}/></button>
+          <button type="button" title="Underline (Ctrl+U)" onClick={() => runCommand("underline")}><UnderlineIcon size={14}/></button>
+          <span className="text-toolbar-divider"/>
+          <button type="button" title="Bulleted list" onClick={() => runCommand("insertUnorderedList")}><BulletListIcon size={14}/></button>
+          <button type="button" title="Numbered list" onClick={() => runCommand("insertOrderedList")}><NumberedListIcon size={14}/></button>
+          <button type="button" title="Checklist" onClick={runChecklistToggle}><ChecklistIcon size={14}/></button>
+        </div>
+      )}
+      <div
+        ref={editorRef}
+        className="text-editor"
+        contentEditable
+        role="textbox"
+        tabIndex={0}
+        suppressContentEditableWarning
+        data-placeholder="Write something…"
+        spellCheck
+        onFocus={() => { setToolbarVisible(true); onFocus(); }}
+        onBlur={() => setToolbarVisible(false)}
+        onPointerDown={(event) => {
+          if (event.button !== 0) return;
+          event.stopPropagation();
+          editorRef.current?.focus({ preventScroll: true });
+          onFocus();
+        }}
+        onInput={emitChange}
+        onKeyDown={(event) => {
+          if ((event.ctrlKey || event.metaKey) && ["b", "u"].includes(event.key.toLowerCase())) {
             event.preventDefault();
-            if (!(listItem.textContent ?? "").trim()) {
-              const paragraph = document.createElement("div");
-              paragraph.innerHTML = "<br>";
-              listItem.closest("ul, ol")!.insertAdjacentElement("afterend", paragraph);
-              listItem.remove();
-              placeCursorAtEnd(paragraph);
-            } else {
-              const nextItem = document.createElement("li");
-              nextItem.innerHTML = "<br>";
-              listItem.insertAdjacentElement("afterend", nextItem);
-              placeCursorAtEnd(nextItem);
-            }
+            const commands = { b: "bold", u: "underline" } as const;
+            document.execCommand(commands[event.key.toLowerCase() as "b" | "u"]);
             emitChange();
             return;
           }
-          if (block?.closest("h2")) {
+          if (event.key === "Tab" && !(event.ctrlKey || event.metaKey) && selectionBlock()?.closest("li")) {
             event.preventDefault();
-            const paragraph = document.createElement("div");
-            paragraph.innerHTML = "<br>";
-            block.closest("h2")!.insertAdjacentElement("afterend", paragraph);
-            placeCursorAtEnd(paragraph);
+            document.execCommand(event.shiftKey ? "outdent" : "indent");
             emitChange();
           }
-        }
-      }}
-      onPaste={(event) => {
-        event.stopPropagation();
-        const text = event.clipboardData.getData("text/plain");
-        const url = normalizeUrl(text);
-        event.preventDefault();
-        if (url) {
-          document.execCommand(
-            "insertHTML",
-            false,
-            `<a href="${url.replace(/"/g, "&quot;")}" target="_blank" rel="noreferrer">${text}</a>`,
-          );
-        } else {
-          const rich = event.clipboardData.getData("text/html");
-          if (rich) document.execCommand("insertHTML", false, sanitizeClipboardHtml(rich));
-          else document.execCommand("insertText", false, text);
-        }
-        emitChange();
-      }}
-      onClick={(event) => {
-        if (
-          event.target instanceof HTMLAnchorElement &&
-          (event.ctrlKey || event.metaKey)
-        ) {
+          if (event.key === "Enter") {
+            const block = selectionBlock();
+            const listItem = block?.closest("li");
+            if (listItem) {
+              event.preventDefault();
+              const isChecklist = listItem.closest("ul")?.classList.contains("checklist");
+              if (!(listItem.textContent ?? "").trim()) {
+                const paragraph = document.createElement("div");
+                paragraph.innerHTML = "<br>";
+                listItem.closest("ul, ol")!.insertAdjacentElement("afterend", paragraph);
+                listItem.remove();
+                placeCursorAtEnd(paragraph);
+              } else {
+                const nextItem = isChecklist ? createChecklistItem() : document.createElement("li");
+                if (!isChecklist) nextItem.innerHTML = "<br>";
+                listItem.insertAdjacentElement("afterend", nextItem);
+                placeCursorAtEnd(nextItem);
+              }
+              emitChange();
+              return;
+            }
+            if (block?.closest("h2")) {
+              event.preventDefault();
+              const paragraph = document.createElement("div");
+              paragraph.innerHTML = "<br>";
+              block.closest("h2")!.insertAdjacentElement("afterend", paragraph);
+              placeCursorAtEnd(paragraph);
+              emitChange();
+            }
+          }
+        }}
+        onPaste={(event) => {
+          event.stopPropagation();
+          const text = event.clipboardData.getData("text/plain");
+          const url = normalizeUrl(text);
           event.preventDefault();
-          window.open(event.target.href, "_blank", "noopener,noreferrer");
-        }
-      }}
-    />
+          if (url) {
+            document.execCommand(
+              "insertHTML",
+              false,
+              `<a href="${url.replace(/"/g, "&quot;")}" target="_blank" rel="noreferrer">${text}</a>`,
+            );
+          } else {
+            const rich = event.clipboardData.getData("text/html");
+            if (rich) document.execCommand("insertHTML", false, sanitizeClipboardHtml(rich));
+            else document.execCommand("insertText", false, text);
+          }
+          emitChange();
+        }}
+        onClick={(event) => {
+          const marker = (event.target as HTMLElement).closest(".checklist-marker");
+          if (marker) {
+            const item = marker.closest("li");
+            if (item instanceof HTMLElement) {
+              item.dataset.checked = item.dataset.checked === "true" ? "false" : "true";
+              emitChange();
+            }
+            return;
+          }
+          if (
+            event.target instanceof HTMLAnchorElement &&
+            (event.ctrlKey || event.metaKey)
+          ) {
+            event.preventDefault();
+            window.open(event.target.href, "_blank", "noopener,noreferrer");
+          }
+        }}
+      />
+    </>
   );
 }
