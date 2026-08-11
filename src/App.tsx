@@ -109,10 +109,8 @@ export default function App() {
     setEmojiPickerOpen(false);
     setCustomEmoji("");
   }, [activePath]);
-  const [saveReminderPaths, setSaveReminderPaths] = useState<Set<string>>(() => new Set());
   const histories = useRef(new Map<string, HistoryState>());
   const canvasesRef = useRef(openCanvases);
-  const reminderTimers = useRef(new Map<string, number>());
 
   useEffect(() => {
     canvasesRef.current = openCanvases;
@@ -187,33 +185,6 @@ export default function App() {
     localStorage.setItem(SESSION_KEY, JSON.stringify(session));
   }, [activePath, font, libraryFolder, openCanvases, randomColors, sidebarCollapsed, theme, uiScale]);
 
-  const scheduleSaveReminder = useCallback((path: string) => {
-    if (reminderTimers.current.has(path)) return;
-    const timer = window.setTimeout(() => {
-      reminderTimers.current.delete(path);
-      const canvas = canvasesRef.current.find((item) => item.path === path);
-      if (!canvas?.dirty) return;
-      setSaveReminderPaths((current) => new Set(current).add(path));
-    }, 60_000);
-    reminderTimers.current.set(path, timer);
-  }, []);
-
-  const clearSaveReminder = useCallback((path: string) => {
-    const timer = reminderTimers.current.get(path);
-    if (timer) window.clearTimeout(timer);
-    reminderTimers.current.delete(path);
-    setSaveReminderPaths((current) => {
-      if (!current.has(path)) return current;
-      const next = new Set(current);
-      next.delete(path);
-      return next;
-    });
-  }, []);
-
-  useEffect(() => () => {
-    for (const timer of reminderTimers.current.values()) window.clearTimeout(timer);
-  }, []);
-
   const saveCanvasNow = useCallback(async (path: string) => {
     const canvas = canvasesRef.current.find((item) => item.path === path);
     if (!canvas?.dirty || canvas.saving) return;
@@ -233,8 +204,6 @@ export default function App() {
         : item);
       canvasesRef.current = savedState;
       setOpenCanvases(savedState);
-      if (stillDirty) scheduleSaveReminder(path);
-      else clearSaveReminder(path);
       void refreshFiles();
     } catch (reason) {
       const failedState = canvasesRef.current.map((item) => item.path === path ? { ...item, saving: false } : item);
@@ -242,7 +211,16 @@ export default function App() {
       setOpenCanvases(failedState);
       setError(`Couldn’t save ${canvas.document.name}: ${reason instanceof Error ? reason.message : String(reason)}`);
     }
-  }, [clearSaveReminder, refreshFiles, scheduleSaveReminder]);
+  }, [refreshFiles]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      for (const canvas of canvasesRef.current) {
+        if (canvas.dirty && !canvas.saving) void saveCanvasNow(canvas.path);
+      }
+    }, 25_000);
+    return () => window.clearInterval(timer);
+  }, [saveCanvasNow]);
 
   const activeCanvas = openCanvases.find((canvas) => canvas.path === activePath) ?? null;
   const history = activePath ? histories.current.get(activePath) : undefined;
@@ -260,13 +238,11 @@ export default function App() {
       state.future = [];
       histories.current.set(activePath, state);
     }
-    const wasDirty = currentActive.dirty;
     const changed = canvasesRef.current.map((canvas) => canvas.path === activePath
       ? { ...canvas, document: next, dirty: markDirty ? true : canvas.dirty }
       : canvas);
     canvasesRef.current = changed;
     setOpenCanvases(changed);
-    if (markDirty && !wasDirty) scheduleSaveReminder(activePath);
   };
 
   const undo = () => {
@@ -358,7 +334,6 @@ export default function App() {
   const closeTab = (path: string) => {
     const closing = openCanvases.find((canvas) => canvas.path === path);
     if (closing?.dirty && !window.confirm(`Close “${closing.document.name}” without saving?`)) return;
-    clearSaveReminder(path);
     const index = openCanvases.findIndex((canvas) => canvas.path === path);
     const next = openCanvases.filter((canvas) => canvas.path !== path);
     setOpenCanvases(next);
@@ -405,7 +380,6 @@ export default function App() {
 
   const applyFont = (nextFont: string) => {
     setFont(nextFont);
-    const newlyDirty = canvasesRef.current.filter((canvas) => !canvas.dirty).map((canvas) => canvas.path);
     const changed = canvasesRef.current.map((canvas) => ({
       ...canvas,
       document: { ...canvas.document, font: nextFont, updatedAt: new Date().toISOString() },
@@ -413,7 +387,6 @@ export default function App() {
     }));
     canvasesRef.current = changed;
     setOpenCanvases(changed);
-    for (const path of newlyDirty) scheduleSaveReminder(path);
   };
 
   const applyCanvasEmoji = (emoji: string) => {
@@ -556,14 +529,6 @@ export default function App() {
               onRandomColorsChange={setRandomColors}
               search={search}
             />
-            {activeCanvas.dirty && saveReminderPaths.has(activeCanvas.path) && (
-              <div className="save-reminder" role="status">
-                <div><strong>Changes aren’t saved</strong><span>Your canvas is still only in this session.</span></div>
-                <button type="button" disabled={activeCanvas.saving} onClick={() => void saveCanvasNow(activeCanvas.path)}>
-                  {activeCanvas.saving ? "Saving…" : "Save now"}
-                </button>
-              </div>
-            )}
           </>
         ) : (
           <div className="no-canvas-view">
