@@ -201,7 +201,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, [contenteditabl
 .grid-card.is-selected { outline: 2px solid #858d96; outline-offset: 3px; }
 :root[data-theme="dark"] .grid-card.is-selected { outline-color: #808996; }
 .grid-card.is-search-dimmed { opacity: 0.16; filter: saturate(.2); }
-.grid-card.sheet-focused-card { z-index: 120; width: 920px !important; height: 590px !important; box-shadow: 0 28px 80px rgba(21,27,42,.28), 0 3px 8px rgba(21,27,42,.13); }
+.grid-card.sheet-focused-card { z-index: 120; min-width: 480px; min-height: 320px; box-shadow: 0 28px 80px rgba(21,27,42,.28), 0 3px 8px rgba(21,27,42,.13); }
 .card-hover-tools { position: absolute; z-index: 15; display: flex; gap: 0.18rem; top: -2.3rem; left: 0.5rem; padding: 0.23rem; border: 1px solid var(--border); border-radius: 0.65rem; background: var(--surface); box-shadow: var(--shadow-small); opacity: 0; transform: translateY(4px); pointer-events: none; transition: .15s ease; }
 .card-hover-tools.hidden { display: none; }
 .grid-card:hover .card-hover-tools, .grid-card.is-selected .card-hover-tools { opacity: 1; transform: translateY(0); pointer-events: auto; }
@@ -235,7 +235,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, [contenteditabl
 .sheet-formula-bar button:hover { color: var(--text); background: var(--surface-hover); }
 .sheet-formula-bar button:disabled { opacity: .38; cursor: default; }
 .sheet-editor { display: grid; flex: 1; width: 100%; min-height: 0; overflow: hidden; align-content: stretch; background: var(--surface); user-select: text; }
-.sheet-editor.is-focused { overflow: auto; align-content: start; grid-auto-rows: 2.55rem; padding-bottom: .75rem; }
+.sheet-editor.is-focused { overflow: auto; padding-bottom: .75rem; }
 .sheet-cell { min-width: 0; width: 100%; height: 100%; padding: 0 .65rem; border: 0; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); outline: 0; color: var(--text); background: var(--surface); font-size: .78rem; text-align: center; text-overflow: ellipsis; }
 .sheet-cell.header-cell { color: var(--text); background: color-mix(in srgb, var(--card-accent) 13%, var(--surface)); font-weight: 720; }
 .sheet-cell.calculated-cell { color: var(--text); background: color-mix(in srgb, var(--card-accent) 5%, var(--surface)); font-weight: 650; }

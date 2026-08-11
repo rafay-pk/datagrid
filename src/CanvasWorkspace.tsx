@@ -445,8 +445,8 @@ export function CanvasWorkspace({
           const textMinimum = source?.type === "text" ? textMinimumsRef.current.get(source.id) : undefined;
           target = {
             ...interaction.origin,
-            w: Math.max(textMinimum?.w ?? 1, source?.type === "image" ? interaction.origin.w + dx : Math.min(4, interaction.origin.w + dx)),
-            h: Math.max(textMinimum?.h ?? 1, source?.type === "image" ? interaction.origin.h + dy : Math.min(4, interaction.origin.h + dy)),
+            w: Math.max(textMinimum?.w ?? 1, interaction.origin.w + dx),
+            h: Math.max(textMinimum?.h ?? 1, interaction.origin.h + dy),
           };
         }
         setPreviewCards(reflowCards(documentRef.current.cards, interaction.cardId, target, { x: dx, y: dy }));
