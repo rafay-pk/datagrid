@@ -64,6 +64,7 @@ type Interaction =
     };
 
 const stride = GRID_UNIT + GRID_GAP;
+const FOCUS_PADDING = 96;
 
 function cardSize(card: CanvasCard): React.CSSProperties {
   return {
@@ -138,12 +139,18 @@ export function CanvasWorkspace({
   const [sheetColumns, setSheetColumns] = useState(3);
   const [sheetOrigin, setSheetOrigin] = useState<{ x: number; y: number } | undefined>();
   const [notice, setNotice] = useState<string | null>(null);
+  const [isFocusing, setIsFocusing] = useState(false);
   const lastRandomColorRef = useRef<string | null>(null);
   const textMinimumsRef = useRef(new Map<string, { w: number; h: number }>());
+  const focusTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     documentRef.current = document;
   }, [document]);
+
+  useEffect(() => () => {
+    if (focusTimeoutRef.current !== null) window.clearTimeout(focusTimeoutRef.current);
+  }, []);
 
   useEffect(() => {
     setViewport(document.viewport);
@@ -192,6 +199,27 @@ export function CanvasWorkspace({
       x: Math.round((point.x - surface.clientWidth / 2 - viewport.x) / viewport.zoom / stride),
       y: Math.round((point.y - surface.clientHeight / 2 - viewport.y) / viewport.zoom / stride),
     };
+  };
+
+  const focusCard = (card: CanvasCard) => {
+    const surface = surfaceRef.current;
+    if (!surface) return;
+    const bounds = surface.getBoundingClientRect();
+    const width = card.w * GRID_UNIT + (card.w - 1) * GRID_GAP;
+    const height = card.h * GRID_UNIT + (card.h - 1) * GRID_GAP;
+    const centerX = card.x * stride + GRID_GAP / 2 + width / 2;
+    const centerY = card.y * stride + GRID_GAP / 2 + height / 2;
+    const zoom = clampZoom(Math.min(
+      (bounds.width - FOCUS_PADDING * 2) / width,
+      (bounds.height - FOCUS_PADDING * 2) / height,
+    ));
+    if (focusTimeoutRef.current !== null) window.clearTimeout(focusTimeoutRef.current);
+    setIsFocusing(true);
+    setViewport({ x: -centerX * zoom, y: -centerY * zoom, zoom });
+    focusTimeoutRef.current = window.setTimeout(() => {
+      setIsFocusing(false);
+      focusTimeoutRef.current = null;
+    }, 340);
   };
 
   const placeCard = <T extends CanvasCard>(card: Omit<T, "x" | "y">, origin = viewportCenterGrid()) => {
@@ -551,7 +579,7 @@ export function CanvasWorkspace({
       } as React.CSSProperties}
     >
       <div
-        className="canvas-world"
+        className={`canvas-world${isFocusing ? " is-focusing" : ""}`}
         style={{ transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})` }}
       >
         {cards.map((card) => {
@@ -576,6 +604,7 @@ export function CanvasWorkspace({
               onDoubleClick={(event) => {
                 event.stopPropagation();
                 if (card.type === "spreadsheet") setFocusedSheetId(card.id);
+                focusCard(card);
               }}
             >
               <div className={`card-hover-tools${sheetFocused ? " hidden" : ""}`}>
