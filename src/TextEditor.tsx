@@ -7,6 +7,7 @@ interface TextEditorProps {
   html: string;
   onChange: (html: string, blocks: TextBlock[]) => void;
   onFocus: () => void;
+  onActiveChange?: (active: boolean) => void;
   onMeasure: (metrics: {
     scrollHeight: number;
     clientHeight: number;
@@ -129,7 +130,7 @@ function sanitizeClipboardHtml(html: string): string {
   return template.innerHTML;
 }
 
-export function TextEditor({ html, onChange, onFocus, onMeasure }: TextEditorProps) {
+export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure }: TextEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   const measureFrameRef = useRef<number | null>(null);
   const [toolbarVisible, setToolbarVisible] = useState(false);
@@ -212,8 +213,8 @@ export function TextEditor({ html, onChange, onFocus, onMeasure }: TextEditorPro
         suppressContentEditableWarning
         data-placeholder="Write something…"
         spellCheck
-        onFocus={() => { setToolbarVisible(true); onFocus(); }}
-        onBlur={() => setToolbarVisible(false)}
+        onFocus={() => { setToolbarVisible(true); onActiveChange?.(true); onFocus(); }}
+        onBlur={() => { setToolbarVisible(false); onActiveChange?.(false); }}
         onPointerDown={(event) => {
           if (event.button !== 0) return;
           event.stopPropagation();

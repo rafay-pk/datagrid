@@ -232,7 +232,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, [contenteditabl
 .text-editor .checklist li[data-checked="true"] .checklist-marker::after { content: ""; position: absolute; left: .28rem; top: .1rem; width: .28rem; height: .5rem; border: solid white; border-width: 0 1.6px 1.6px 0; transform: rotate(40deg); }
 .text-editor .checklist li[data-checked="true"] { color: var(--text-muted); text-decoration: line-through; text-decoration-color: var(--text-faint); }
 
-.text-toolbar { position: absolute; z-index: 16; display: flex; align-items: center; gap: .12rem; top: -4.75rem; left: 50%; transform: translateX(-50%); padding: .22rem; border: 1px solid var(--primary-hover); border-radius: .65rem; background: var(--primary); box-shadow: var(--shadow-small); }
+.text-toolbar { position: absolute; z-index: 16; display: flex; align-items: center; gap: .12rem; top: -2.6rem; left: 50%; transform: translateX(-50%); padding: .22rem; border: 1px solid var(--primary-hover); border-radius: .65rem; background: var(--primary); box-shadow: var(--shadow-small); }
 .text-toolbar button { display: grid; place-items: center; width: 1.65rem; height: 1.65rem; border-radius: .45rem; color: rgba(255,255,255,.82); background: transparent; cursor: pointer; transition: color .12s ease, background .12s ease; }
 .text-toolbar button:hover { color: #fff; background: rgba(255,255,255,.2); }
 .text-toolbar-divider { width: 1px; height: 1.1rem; margin: 0 .2rem; background: rgba(255,255,255,.35); }

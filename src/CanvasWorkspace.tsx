@@ -132,6 +132,7 @@ export function CanvasWorkspace({
   const [previewCards, setPreviewCards] = useState<CanvasCard[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [focusedSheetId, setFocusedSheetId] = useState<string | null>(null);
+  const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [linkInputOpen, setLinkInputOpen] = useState(false);
   const [linkValue, setLinkValue] = useState("");
   const [sheetConfigOpen, setSheetConfigOpen] = useState(false);
@@ -585,6 +586,7 @@ export function CanvasWorkspace({
         {cards.map((card) => {
           const selected = card.id === selectedId;
           const sheetFocused = card.id === focusedSheetId;
+          const textEditing = card.id === editingTextId;
           const dimmed = Boolean(search.trim()) && !matchingIds.has(card.id);
           return (
             <article
@@ -607,7 +609,7 @@ export function CanvasWorkspace({
                 focusCard(card);
               }}
             >
-              <div className={`card-hover-tools${sheetFocused ? " hidden" : ""}`}>
+              <div className={`card-hover-tools${sheetFocused || textEditing ? " hidden" : ""}`}>
                 <button className="card-tool" title="Duplicate card" onClick={(event) => { event.stopPropagation(); duplicateCard(card); }}><CopyIcon size={16}/></button>
                 <button className="card-tool danger-tool" title="Delete card" onClick={(event) => { event.stopPropagation(); deleteCard(card.id); }}><TrashIcon size={16}/></button>
               </div>
@@ -616,6 +618,7 @@ export function CanvasWorkspace({
                 <TextEditor
                   html={card.html}
                   onFocus={() => setSelectedId(card.id)}
+                  onActiveChange={(active) => setEditingTextId(active ? card.id : null)}
                   onChange={(html, blocks) => updateCard(card.id, (current) => current.type === "text" ? { ...current, html, blocks } : current)}
                   onMeasure={(metrics) => handleTextMeasure(card.id, metrics)}
                 />
