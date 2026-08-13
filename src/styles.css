@@ -194,6 +194,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, [contenteditabl
 .canvas-surface.tool-text, .canvas-surface.tool-image, .canvas-surface.tool-spreadsheet, .canvas-surface.tool-link { cursor: crosshair; }
 .canvas-world { position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform-origin: 0 0; will-change: transform; }
 .canvas-world.is-focusing { transition: transform .34s cubic-bezier(.2,.8,.2,1); }
+.canvas-world.is-text-editing { will-change: auto; }
 
 .grid-card { position: absolute; overflow: visible; border: 1px solid var(--border); border-bottom: 5px solid var(--card-accent); border-radius: 1rem; color: var(--text); background: var(--surface-raised); box-shadow: var(--shadow-card); transition: left .17s cubic-bezier(.2,.8,.2,1), top .17s cubic-bezier(.2,.8,.2,1), width .16s ease, height .16s ease, opacity .16s ease, box-shadow .16s ease; }
 .grid-card::after { content: ""; position: absolute; z-index: -1; left: 0.7rem; right: 0.7rem; bottom: -0.48rem; height: 0.55rem; border-radius: 50%; background: color-mix(in srgb, var(--card-accent) 25%, transparent); filter: blur(8px); opacity: .75; }

@@ -580,7 +580,7 @@ export function CanvasWorkspace({
       } as React.CSSProperties}
     >
       <div
-        className={`canvas-world${isFocusing ? " is-focusing" : ""}`}
+        className={`canvas-world${isFocusing ? " is-focusing" : ""}${editingTextId ? " is-text-editing" : ""}`}
         style={{ transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})` }}
       >
         {cards.map((card) => {
