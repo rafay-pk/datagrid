@@ -1,4 +1,12 @@
-<h1 align="center">Datagrid</h1>
+<p align="center">
+  <img
+    src="docs/datagrid-cover.webp"
+    alt="Datagrid showing a sample canvas"
+    width="100%"
+  />
+</p>
+
+<h1 align="center">Data Grid</h1>
 
 <p align="center">
   A private, local-first note-taking app built around an infinite snapping grid.
@@ -12,26 +20,35 @@
 
 ## Overview
 
-Datagrid replaces the freeform canvas with a structured two-dimensional grid. Cards snap into evenly spaced slots, reflow around one another, and remain editable directly on the canvas.
+Datagrid replaces the freeform "sticky notes on a canvas" model with a structured two-dimensional grid. Cards snap into evenly spaced slots, reflow around one another as you add and move content, and stay directly editable on the canvas — no separate editor window.
 
-Every canvas is saved as a single OpenDocument Text (`.odt`) file containing its layout, text, images, link previews, and embedded spreadsheets.
+Every canvas is saved as a single OpenDocument Text (`.odt`) file containing its layout, text, images, link previews, and embedded spreadsheets, so your notes stay readable outside Datagrid too.
 
 ## Features
 
-- Infinite panning and zooming grid
-- Text, image, spreadsheet, and rich link cards
-- Live card reflow and grid-based resizing
-- Lightweight headings, bold, italic, and lists
-- Spreadsheet formulas and calculated columns
-- Automatic image and link accent colors
-- Multiple open canvases with tabs
-- Per-canvas emojis
-- Undo and redo
+**Canvas**
+- Infinite panning and zooming grid canvas
+- Cards snap into a grid and reflow automatically as the layout changes
+- Multiple canvases open at once, each in its own tab
+- Per-canvas emoji labels
+- In-canvas search (`Ctrl+F`)
+- Full undo and redo history (`Ctrl+Z` / `Ctrl+Y`)
+
+**Cards**
+- Text cards with headings, bold, italic, and lists
+- Image cards
+- Spreadsheet cards with formulas and calculated columns
+- Link cards with automatically fetched previews and accent colors
+- Quick-switch tool shortcuts: select (`H`), text (`T`), image (`M`), spreadsheet (`S`), link (`L`)
+
+**Appearance**
 - Light and dark themes
-- Adjustable interface scale and fonts
-- User-selected local library folder
-- Portable OpenDocument storage
-- Offline-first operation
+- Adjustable interface scale and font, with four bundled variable typefaces (DM Sans, Figtree, Manrope, Work Sans)
+
+**Storage & privacy**
+- You choose a local library folder — Datagrid never uploads canvas data anywhere
+- Each canvas is a portable, standards-based `.odt` file that other OpenDocument software can open
+- Offline-first; the only feature that touches the network is fetching a link preview, and the result is cached inside the canvas afterward
 
 ## Installation
 
@@ -44,32 +61,105 @@ Every canvas is saved as a single OpenDocument Text (`.odt`) file containing its
 
 Windows may display a warning for unsigned applications. Review the downloaded file and repository before continuing.
 
+macOS and Linux users can run Datagrid from source using the development instructions below; see [Portability](#portability) for a note on cross-platform release builds.
+
+## Demo data
+
+A sample canvas is available to see Datagrid's card types and grid layout without starting from a blank canvas.
+
+1. Download [demo-data.odt](demo-data.odt).
+2. Choose (or open) your library folder.
+3. Copy the downloaded file into that folder.
+4. Restart Datagrid, or reopen the library folder, so it picks up the new file — then open it from the canvas list.
+
+Datagrid doesn't watch the library folder for changes made outside the app, so files added directly to the folder only appear after a refresh.
+
 ## Development
 
-Datagrid is built with Tauri 2, React, TypeScript, Vite, and Rust.
+Datagrid is built with [Tauri 2](https://tauri.app), React 19, TypeScript, and Vite on the frontend, with a Rust backend that handles canvas storage, ODT file generation, and link preview fetching.
 
 ### Requirements
 
-- Windows 10 or Windows 11
-- Node.js
-- Rust with the MSVC toolchain
-- Microsoft C++ Build Tools
-- WebView2
+All platforms need:
+
+- [Node.js](https://nodejs.org/) 18 or later
+- [Rust](https://www.rust-lang.org/tools/install) (via `rustup`)
+
+Plus the platform-specific toolchain below, matching [Tauri's prerequisites](https://v2.tauri.app/start/prerequisites/).
+
+<details>
+<summary><strong>Windows</strong></summary>
+
+- Rust with the MSVC toolchain (the default target when installing via `rustup` on Windows)
+- [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) — install the "Desktop development with C++" workload
+- WebView2 Runtime (preinstalled on Windows 11; installable separately on Windows 10)
+
+</details>
+
+<details>
+<summary><strong>macOS</strong></summary>
+
+- Xcode Command Line Tools:
+
+  ```bash
+  xcode-select --install
+  ```
+
+- Rust via `rustup` (the default toolchain works)
+
+</details>
+
+<details>
+<summary><strong>Linux</strong></summary>
+
+Install WebKitGTK and the standard build toolchain for your distribution.
+
+**Debian / Ubuntu**
+
+```bash
+sudo apt update && sudo apt install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+```
+
+**Fedora**
+
+```bash
+sudo dnf install -y webkit2gtk4.1-devel openssl-devel curl wget file libappindicator-gtk3-devel librsvg2-devel libxdo-devel && sudo dnf group install -y "c-development"
+```
+
+**Arch**
+
+```bash
+sudo pacman -Syu --needed webkit2gtk-4.1 base-devel curl wget file openssl appmenu-gtk-module libappindicator-gtk3 librsvg xdotool
+```
+
+</details>
 
 ### Run locally
 
-```powershell
+```bash
+git clone https://github.com/rafay-pk/datagrid.git
+cd datagrid
 npm install
 npm run tauri dev
 ```
 
+This launches Datagrid in development mode with hot reload on every supported platform.
+
 ### Create a release build
+
+```bash
+npm run tauri build
+```
+
+On Windows, `release.ps1` wraps this into a single versioned command:
 
 ```powershell
 .\release.ps1 0.1.0
 ```
 
 Installers are generated under `src-tauri/target/release/bundle/`.
+
+> **Note:** `src-tauri/tauri.conf.json` currently restricts `bundle.targets` to `nsis`, so `npm run tauri build` only produces a Windows installer today. To package a `.dmg`/`.app` on macOS or a `.deb`/`.rpm`/AppImage on Linux, update the `targets` array for your platform before building. That gap is a great first pull request if you're set up on macOS or Linux.
 
 ## Data and privacy
 
@@ -83,4 +173,8 @@ Datagrid canvases are standard `.odt` files with embedded spreadsheet documents 
 
 ## Contributing
 
-Bug reports and improvement suggestions are welcome through GitHub Issues.
+Contributions are very welcome, including pull requests — bug fixes, features, and documentation improvements are all appreciated. For larger changes, opening an issue first is a good way to check direction before you invest time, but small fixes are welcome as a PR directly.
+
+## License
+
+Datagrid is released under the [PolyForm Noncommercial License 1.0.0](LICENSE.md).
