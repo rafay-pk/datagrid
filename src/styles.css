@@ -5,7 +5,7 @@
   font-family: var(--app-font);
   color: #20262d;
   background: #cfd3d8;
-  font-synthesis: none;
+  font-synthesis: style;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   --background: #cfd3d8;
