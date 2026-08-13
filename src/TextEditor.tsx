@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { blocksFromHtml, normalizeUrl } from "./textFormat";
 import type { TextBlock } from "./types";
-import { BoldIcon, BulletListIcon, ChecklistIcon, NumberedListIcon, UnderlineIcon } from "./icons";
+import { BoldIcon, BulletListIcon, ChecklistIcon, ItalicIcon, NumberedListIcon, UnderlineIcon } from "./icons";
 
 interface TextEditorProps {
   html: string;
@@ -134,7 +134,7 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure 
   const editorRef = useRef<HTMLDivElement>(null);
   const measureFrameRef = useRef<number | null>(null);
   const [toolbarVisible, setToolbarVisible] = useState(false);
-  const [activeFormats, setActiveFormats] = useState({ bold: false, underline: false });
+  const [activeFormats, setActiveFormats] = useState({ bold: false, italic: false, underline: false });
 
   const syncActiveFormats = () => {
     const editor = editorRef.current;
@@ -143,6 +143,7 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure 
     if (!editor || !anchor || (anchor !== editor && !editor.contains(anchor))) return;
     setActiveFormats({
       bold: document.queryCommandState("bold"),
+      italic: document.queryCommandState("italic"),
       underline: document.queryCommandState("underline"),
     });
   };
@@ -215,6 +216,7 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure 
       {toolbarVisible && (
         <div className="text-toolbar" role="toolbar" aria-label="Text formatting" onMouseDown={(event) => event.preventDefault()}>
           <button type="button" className={activeFormats.bold ? "active" : ""} aria-pressed={activeFormats.bold} title="Bold (Ctrl+B)" onClick={() => runCommand("bold")}><BoldIcon size={14}/></button>
+          <button type="button" className={activeFormats.italic ? "active" : ""} aria-pressed={activeFormats.italic} title="Italic (Ctrl+I)" onClick={() => runCommand("italic")}><ItalicIcon size={14}/></button>
           <button type="button" className={activeFormats.underline ? "active" : ""} aria-pressed={activeFormats.underline} title="Underline (Ctrl+U)" onClick={() => runCommand("underline")}><UnderlineIcon size={14}/></button>
           <span className="text-toolbar-divider"/>
           <button type="button" title="Bulleted list" onClick={() => runCommand("insertUnorderedList")}><BulletListIcon size={14}/></button>
@@ -243,10 +245,10 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure 
         onKeyUp={syncActiveFormats}
         onMouseUp={syncActiveFormats}
         onKeyDown={(event) => {
-          if ((event.ctrlKey || event.metaKey) && ["b", "u"].includes(event.key.toLowerCase())) {
+          if ((event.ctrlKey || event.metaKey) && ["b", "i", "u"].includes(event.key.toLowerCase())) {
             event.preventDefault();
-            const commands = { b: "bold", u: "underline" } as const;
-            document.execCommand(commands[event.key.toLowerCase() as "b" | "u"]);
+            const commands = { b: "bold", i: "italic", u: "underline" } as const;
+            document.execCommand(commands[event.key.toLowerCase() as keyof typeof commands]);
             emitChange();
             syncActiveFormats();
             return;
