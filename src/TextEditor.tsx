@@ -195,7 +195,7 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure 
   return (
     <>
       {toolbarVisible && (
-        <div className="text-toolbar" onMouseDown={(event) => event.preventDefault()}>
+        <div className="text-toolbar" role="toolbar" aria-label="Text formatting" onMouseDown={(event) => event.preventDefault()}>
           <button type="button" title="Bold (Ctrl+B)" onClick={() => runCommand("bold")}><BoldIcon size={14}/></button>
           <button type="button" title="Underline (Ctrl+U)" onClick={() => runCommand("underline")}><UnderlineIcon size={14}/></button>
           <span className="text-toolbar-divider"/>
