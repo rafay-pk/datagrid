@@ -13,12 +13,14 @@ export interface TextRun {
   text: string;
   bold?: boolean;
   italic?: boolean;
+  underline?: boolean;
   href?: string;
 }
 
 export interface TextBlock {
-  kind: "paragraph" | "heading" | "unordered-item" | "ordered-item";
+  kind: "paragraph" | "heading" | "unordered-item" | "ordered-item" | "checklist-item";
   level?: number;
+  checked?: boolean;
   runs: TextRun[];
 }
 

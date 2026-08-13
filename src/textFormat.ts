@@ -12,6 +12,7 @@ function runsFromNode(node: Node, inherited: Omit<TextRun, "text"> = {}): TextRu
     ...inherited,
     ...(tag === "strong" || tag === "b" ? { bold: true } : {}),
     ...(tag === "em" || tag === "i" ? { italic: true } : {}),
+    ...(tag === "u" ? { underline: true } : {}),
     ...(tag === "a" && node.getAttribute("href")
       ? { href: node.getAttribute("href")! }
       : {}),
@@ -28,8 +29,8 @@ export function blocksFromHtml(html: string): TextBlock[] {
   template.innerHTML = html;
   const blocks: TextBlock[] = [];
 
-  const addBlock = (element: Element, kind: TextBlock["kind"], level?: number) => {
-    blocks.push({ kind, level, runs: runsFromNode(element) });
+  const addBlock = (element: Element, kind: TextBlock["kind"], level?: number, checked?: boolean) => {
+    blocks.push({ kind, level, checked, runs: runsFromNode(element) });
   };
 
   for (const node of Array.from(template.content.childNodes)) {
@@ -39,12 +40,13 @@ export function blocksFromHtml(html: string): TextBlock[] {
     }
     if (!(node instanceof HTMLElement)) continue;
     const tag = node.tagName.toLowerCase();
+    const isChecklist = tag === "ul" && node.classList.contains("checklist");
     if (tag === "h1" || tag === "h2") addBlock(node, "heading");
     else if (tag === "ul" || tag === "ol") {
       for (const child of Array.from(node.children)) {
-        if (child.tagName.toLowerCase() === "li") {
-          addBlock(child, tag === "ul" ? "unordered-item" : "ordered-item", 0);
-        }
+        if (child.tagName.toLowerCase() !== "li") continue;
+        if (isChecklist) addBlock(child, "checklist-item", 0, (child as HTMLElement).dataset.checked === "true");
+        else addBlock(child, tag === "ul" ? "unordered-item" : "ordered-item", 0);
       }
     } else addBlock(node, "paragraph");
   }

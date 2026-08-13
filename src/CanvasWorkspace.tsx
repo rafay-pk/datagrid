@@ -64,6 +64,7 @@ type Interaction =
     };
 
 const stride = GRID_UNIT + GRID_GAP;
+const FOCUS_PADDING = 96;
 
 function cardSize(card: CanvasCard): React.CSSProperties {
   return {
@@ -131,6 +132,7 @@ export function CanvasWorkspace({
   const [previewCards, setPreviewCards] = useState<CanvasCard[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [focusedSheetId, setFocusedSheetId] = useState<string | null>(null);
+  const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [linkInputOpen, setLinkInputOpen] = useState(false);
   const [linkValue, setLinkValue] = useState("");
   const [sheetConfigOpen, setSheetConfigOpen] = useState(false);
@@ -138,12 +140,18 @@ export function CanvasWorkspace({
   const [sheetColumns, setSheetColumns] = useState(3);
   const [sheetOrigin, setSheetOrigin] = useState<{ x: number; y: number } | undefined>();
   const [notice, setNotice] = useState<string | null>(null);
+  const [isFocusing, setIsFocusing] = useState(false);
   const lastRandomColorRef = useRef<string | null>(null);
   const textMinimumsRef = useRef(new Map<string, { w: number; h: number }>());
+  const focusTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     documentRef.current = document;
   }, [document]);
+
+  useEffect(() => () => {
+    if (focusTimeoutRef.current !== null) window.clearTimeout(focusTimeoutRef.current);
+  }, []);
 
   useEffect(() => {
     setViewport(document.viewport);
@@ -192,6 +200,27 @@ export function CanvasWorkspace({
       x: Math.round((point.x - surface.clientWidth / 2 - viewport.x) / viewport.zoom / stride),
       y: Math.round((point.y - surface.clientHeight / 2 - viewport.y) / viewport.zoom / stride),
     };
+  };
+
+  const focusCard = (card: CanvasCard) => {
+    const surface = surfaceRef.current;
+    if (!surface) return;
+    const bounds = surface.getBoundingClientRect();
+    const width = card.w * GRID_UNIT + (card.w - 1) * GRID_GAP;
+    const height = card.h * GRID_UNIT + (card.h - 1) * GRID_GAP;
+    const centerX = card.x * stride + GRID_GAP / 2 + width / 2;
+    const centerY = card.y * stride + GRID_GAP / 2 + height / 2;
+    const zoom = clampZoom(Math.min(
+      (bounds.width - FOCUS_PADDING * 2) / width,
+      (bounds.height - FOCUS_PADDING * 2) / height,
+    ));
+    if (focusTimeoutRef.current !== null) window.clearTimeout(focusTimeoutRef.current);
+    setIsFocusing(true);
+    setViewport({ x: -centerX * zoom, y: -centerY * zoom, zoom });
+    focusTimeoutRef.current = window.setTimeout(() => {
+      setIsFocusing(false);
+      focusTimeoutRef.current = null;
+    }, 340);
   };
 
   const placeCard = <T extends CanvasCard>(card: Omit<T, "x" | "y">, origin = viewportCenterGrid()) => {
@@ -551,12 +580,13 @@ export function CanvasWorkspace({
       } as React.CSSProperties}
     >
       <div
-        className="canvas-world"
+        className={`canvas-world${isFocusing ? " is-focusing" : ""}${editingTextId ? " is-text-editing" : ""}`}
         style={{ transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})` }}
       >
         {cards.map((card) => {
           const selected = card.id === selectedId;
           const sheetFocused = card.id === focusedSheetId;
+          const textEditing = card.id === editingTextId;
           const dimmed = Boolean(search.trim()) && !matchingIds.has(card.id);
           return (
             <article
@@ -566,7 +596,7 @@ export function CanvasWorkspace({
               onPointerDown={(event) => {
                 if (event.button !== 0) return;
                 const target = event.target as HTMLElement;
-                const interactive = target.closest("button, a, input, textarea, select, [contenteditable='true'], .resize-handle");
+                const interactive = target.closest("button, a, input, textarea, select, [contenteditable='true'], .resize-handle, .text-toolbar");
                 const readOnlySheetCell = card.type === "spreadsheet" && !sheetFocused && target.closest(".sheet-cell");
                 if (interactive && !readOnlySheetCell) return;
                 event.stopPropagation();
@@ -576,9 +606,10 @@ export function CanvasWorkspace({
               onDoubleClick={(event) => {
                 event.stopPropagation();
                 if (card.type === "spreadsheet") setFocusedSheetId(card.id);
+                focusCard(card);
               }}
             >
-              <div className={`card-hover-tools${sheetFocused ? " hidden" : ""}`}>
+              <div className={`card-hover-tools${sheetFocused || textEditing ? " hidden" : ""}`}>
                 <button className="card-tool" title="Duplicate card" onClick={(event) => { event.stopPropagation(); duplicateCard(card); }}><CopyIcon size={16}/></button>
                 <button className="card-tool danger-tool" title="Delete card" onClick={(event) => { event.stopPropagation(); deleteCard(card.id); }}><TrashIcon size={16}/></button>
               </div>
@@ -587,6 +618,7 @@ export function CanvasWorkspace({
                 <TextEditor
                   html={card.html}
                   onFocus={() => setSelectedId(card.id)}
+                  onActiveChange={(active) => setEditingTextId(active ? card.id : null)}
                   onChange={(html, blocks) => updateCard(card.id, (current) => current.type === "text" ? { ...current, html, blocks } : current)}
                   onMeasure={(metrics) => handleTextMeasure(card.id, metrics)}
                 />

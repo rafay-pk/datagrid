@@ -5,7 +5,7 @@
   font-family: var(--app-font);
   color: #20262d;
   background: #cfd3d8;
-  font-synthesis: none;
+  font-synthesis: style;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   --background: #cfd3d8;
@@ -193,6 +193,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, [contenteditabl
 .canvas-surface.is-panning { cursor: grabbing; }
 .canvas-surface.tool-text, .canvas-surface.tool-image, .canvas-surface.tool-spreadsheet, .canvas-surface.tool-link { cursor: crosshair; }
 .canvas-world { position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform-origin: 0 0; will-change: transform; }
+.canvas-world.is-focusing { transition: transform .34s cubic-bezier(.2,.8,.2,1); }
+.canvas-world.is-text-editing { will-change: auto; }
 
 .grid-card { position: absolute; overflow: visible; border: 1px solid var(--border); border-bottom: 5px solid var(--card-accent); border-radius: 1rem; color: var(--text); background: var(--surface-raised); box-shadow: var(--shadow-card); transition: left .17s cubic-bezier(.2,.8,.2,1), top .17s cubic-bezier(.2,.8,.2,1), width .16s ease, height .16s ease, opacity .16s ease, box-shadow .16s ease; }
 .grid-card::after { content: ""; position: absolute; z-index: -1; left: 0.7rem; right: 0.7rem; bottom: -0.48rem; height: 0.55rem; border-radius: 50%; background: color-mix(in srgb, var(--card-accent) 25%, transparent); filter: blur(8px); opacity: .75; }
@@ -221,7 +223,24 @@ button:focus-visible, input:focus-visible, select:focus-visible, [contenteditabl
 .text-editor ul, .text-editor ol { margin: .35rem 0 .5rem; padding-left: 1.4rem; }
 .text-editor li { padding-left: .15rem; margin: .15rem 0; }
 .text-editor strong, .text-editor b { font-weight: 750; }
+.text-editor u { text-decoration-thickness: 1.5px; text-underline-offset: 2px; }
 .text-editor a { color: var(--card-accent); text-decoration-thickness: 1.5px; text-underline-offset: 2px; }
+
+.text-editor .checklist { list-style: none; padding-left: 0; }
+.text-editor .checklist li { display: flex; align-items: flex-start; gap: .5rem; padding-left: 0; }
+.checklist-marker { flex: 0 0 auto; width: 1rem; height: 1rem; margin-top: .19rem; border: 1.5px solid var(--border-strong); border-radius: .3rem; cursor: pointer; }
+.text-editor .checklist li[data-checked="true"] .checklist-marker { background: var(--card-accent); border-color: var(--card-accent); position: relative; }
+.text-editor .checklist li[data-checked="true"] .checklist-marker::after { content: ""; position: absolute; left: .28rem; top: .1rem; width: .28rem; height: .5rem; border: solid white; border-width: 0 1.6px 1.6px 0; transform: rotate(40deg); }
+.text-editor .checklist li[data-checked="true"] { color: var(--text-muted); text-decoration: line-through; text-decoration-color: var(--text-faint); }
+
+.text-toolbar { position: absolute; z-index: 16; display: flex; align-items: center; gap: .18rem; top: -3rem; left: 50%; min-height: 2.35rem; transform: translateX(-50%); padding: .3rem; border: 1px solid var(--border-strong); border-radius: .78rem; background: color-mix(in srgb, var(--surface-raised) 96%, transparent); box-shadow: 0 10px 24px rgba(25,31,45,.18), 0 2px 6px rgba(25,31,45,.12), inset 0 1px 0 rgba(255,255,255,.72); backdrop-filter: blur(16px) saturate(1.2); }
+:root[data-theme="dark"] .text-toolbar { box-shadow: 0 12px 28px rgba(0,0,0,.42), 0 2px 7px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.07); }
+.text-toolbar button { display: grid; place-items: center; width: 1.75rem; height: 1.75rem; padding: 0; border: 1px solid transparent; border-radius: .48rem; color: var(--text-muted); background: transparent; cursor: pointer; transition: color .12s ease, border-color .12s ease, background .12s ease, transform .12s ease; }
+.text-toolbar button:hover { color: var(--text); border-color: var(--border); background: var(--surface-hover); transform: translateY(-1px); }
+.text-toolbar button.active, .text-toolbar button[aria-pressed="true"] { color: var(--text); border-color: color-mix(in srgb, var(--card-accent) 48%, var(--border)); background: color-mix(in srgb, var(--card-accent) 16%, var(--surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--card-accent) 18%, transparent); }
+.text-toolbar button:focus-visible { outline-offset: 1px; }
+.text-toolbar-glyph { font-size: .92rem; font-weight: 750; line-height: 1; }
+.text-toolbar-divider { width: 1px; height: 1.15rem; margin: 0 .22rem; background: var(--border-strong); }
 
 .image-content { display: block; width: 100%; height: 100%; object-fit: contain; border-radius: .92rem .92rem .7rem .7rem; background-image: linear-gradient(45deg, color-mix(in srgb,var(--surface-muted) 85%,transparent) 25%, transparent 25%), linear-gradient(-45deg, color-mix(in srgb,var(--surface-muted) 85%,transparent) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, color-mix(in srgb,var(--surface-muted) 85%,transparent) 75%), linear-gradient(-45deg, transparent 75%, color-mix(in srgb,var(--surface-muted) 85%,transparent) 75%); background-size: 20px 20px; background-position: 0 0, 0 10px, 10px -10px, -10px 0; }
 
@@ -280,13 +299,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, [contenteditabl
 .canvas-zoom-controls button { display: grid; place-items: center; height: 1.85rem; min-width: 1.85rem; padding: 0; border-radius: .5rem; color: var(--text-muted); background: transparent; cursor: pointer; }
 .canvas-zoom-controls button:hover { color: var(--text); background: var(--surface-hover); }
 .canvas-zoom-controls .zoom-value { min-width: 3rem; font-size: .68rem; font-weight: 700; }
-.save-reminder { position: absolute; z-index: 95; top: 1rem; right: 1rem; display: flex; align-items: center; max-width: 24rem; gap: 1rem; padding: .72rem .75rem .72rem .9rem; border: 1px solid var(--border-strong); border-left: 4px solid #f0b90b; border-radius: .82rem; background: var(--surface-raised); box-shadow: var(--shadow-float); }
-.save-reminder > div { display: flex; min-width: 0; flex-direction: column; gap: .12rem; }
-.save-reminder strong { font-size: .78rem; }
-.save-reminder span { color: var(--text-muted); font-size: .66rem; white-space: nowrap; }
-.save-reminder button { flex: none; min-height: 2.1rem; padding: 0 .75rem; border: 1px solid #246fdf; border-radius: .58rem; color: white; background: var(--primary); box-shadow: inset 0 1px 0 rgba(255,255,255,.38), inset 0 -2px 0 rgba(20,67,142,.18); font-size: .7rem; font-weight: 750; cursor: pointer; }
-.save-reminder button:hover:not(:disabled) { background: var(--primary-hover); }
-.save-reminder button:disabled { opacity: .62; cursor: wait; }
 .link-entry-popover { position: absolute; z-index: 90; left: 50%; bottom: 5.35rem; display: flex; align-items: center; gap: .6rem; width: min(31rem, calc(100% - 2rem)); padding: .55rem; border: 1px solid var(--border-strong); border-radius: .9rem; background: var(--surface); box-shadow: var(--shadow-float); transform: translateX(-50%); }
 .link-entry-popover > svg { margin-left: .4rem; color: #e04b73; }
 .link-entry-popover input { flex: 1; min-width: 0; height: 2.4rem; border: 0; outline: 0; background: transparent; font-size: .82rem; }
