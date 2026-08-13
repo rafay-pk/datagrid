@@ -67,7 +67,7 @@ macOS and Linux users can run Datagrid from source using the development instruc
 
 A sample canvas is available to see Datagrid's card types and grid layout without starting from a blank canvas.
 
-1. Download [demo-data.odt](demo-data.odt).
+1. Download [Demo Data](FirstCanvas.odt).
 2. Choose (or open) your library folder.
 3. Copy the downloaded file into that folder.
 4. Restart Datagrid, or reopen the library folder, so it picks up the new file — then open it from the canvas list.
