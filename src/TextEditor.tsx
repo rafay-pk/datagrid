@@ -134,14 +134,16 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure 
   const editorRef = useRef<HTMLDivElement>(null);
   const measureFrameRef = useRef<number | null>(null);
   const [toolbarVisible, setToolbarVisible] = useState(false);
-  const [activeFormats, setActiveFormats] = useState({ bold: false, italic: false, underline: false });
+  const [activeFormats, setActiveFormats] = useState({ heading: false, bold: false, italic: false, underline: false });
 
   const syncActiveFormats = () => {
     const editor = editorRef.current;
     const selection = window.getSelection();
     const anchor = selection?.anchorNode;
     if (!editor || !anchor || (anchor !== editor && !editor.contains(anchor))) return;
+    const block = selectionBlock();
     setActiveFormats({
+      heading: block?.tagName === "H2",
       bold: document.queryCommandState("bold"),
       italic: document.queryCommandState("italic"),
       underline: document.queryCommandState("underline"),
@@ -211,10 +213,22 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure 
     emitChange();
   };
 
+  const runHeadingToggle = () => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.focus({ preventScroll: true });
+    const block = selectionBlock();
+    document.execCommand("formatBlock", false, block?.tagName === "H2" ? "div" : "h2");
+    emitChange();
+    syncActiveFormats();
+  };
+
   return (
     <>
       {toolbarVisible && (
         <div className="text-toolbar" role="toolbar" aria-label="Text formatting" onMouseDown={(event) => event.preventDefault()}>
+          <button type="button" className={activeFormats.heading ? "active" : ""} aria-label="Heading" aria-pressed={activeFormats.heading} title="Heading (# )" onClick={runHeadingToggle}><span className="text-toolbar-glyph" aria-hidden="true">#</span></button>
+          <span className="text-toolbar-divider"/>
           <button type="button" className={activeFormats.bold ? "active" : ""} aria-pressed={activeFormats.bold} title="Bold (Ctrl+B)" onClick={() => runCommand("bold")}><BoldIcon size={14}/></button>
           <button type="button" className={activeFormats.italic ? "active" : ""} aria-pressed={activeFormats.italic} title="Italic (Ctrl+I)" onClick={() => runCommand("italic")}><ItalicIcon size={14}/></button>
           <button type="button" className={activeFormats.underline ? "active" : ""} aria-pressed={activeFormats.underline} title="Underline (Ctrl+U)" onClick={() => runCommand("underline")}><UnderlineIcon size={14}/></button>
