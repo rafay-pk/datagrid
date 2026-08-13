@@ -134,6 +134,18 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure 
   const editorRef = useRef<HTMLDivElement>(null);
   const measureFrameRef = useRef<number | null>(null);
   const [toolbarVisible, setToolbarVisible] = useState(false);
+  const [activeFormats, setActiveFormats] = useState({ bold: false, underline: false });
+
+  const syncActiveFormats = () => {
+    const editor = editorRef.current;
+    const selection = window.getSelection();
+    const anchor = selection?.anchorNode;
+    if (!editor || !anchor || (anchor !== editor && !editor.contains(anchor))) return;
+    setActiveFormats({
+      bold: document.queryCommandState("bold"),
+      underline: document.queryCommandState("underline"),
+    });
+  };
 
   const measure = () => {
     const editor = editorRef.current;
@@ -162,6 +174,11 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure 
     if (measureFrameRef.current !== null) cancelAnimationFrame(measureFrameRef.current);
   }, []);
 
+  useEffect(() => {
+    document.addEventListener("selectionchange", syncActiveFormats);
+    return () => document.removeEventListener("selectionchange", syncActiveFormats);
+  }, []);
+
   useLayoutEffect(() => {
     measure();
   }, [html]);
@@ -182,6 +199,7 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure 
     editorRef.current?.focus({ preventScroll: true });
     document.execCommand(command);
     emitChange();
+    syncActiveFormats();
   };
 
   const runChecklistToggle = () => {
@@ -196,8 +214,8 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure 
     <>
       {toolbarVisible && (
         <div className="text-toolbar" role="toolbar" aria-label="Text formatting" onMouseDown={(event) => event.preventDefault()}>
-          <button type="button" title="Bold (Ctrl+B)" onClick={() => runCommand("bold")}><BoldIcon size={14}/></button>
-          <button type="button" title="Underline (Ctrl+U)" onClick={() => runCommand("underline")}><UnderlineIcon size={14}/></button>
+          <button type="button" className={activeFormats.bold ? "active" : ""} aria-pressed={activeFormats.bold} title="Bold (Ctrl+B)" onClick={() => runCommand("bold")}><BoldIcon size={14}/></button>
+          <button type="button" className={activeFormats.underline ? "active" : ""} aria-pressed={activeFormats.underline} title="Underline (Ctrl+U)" onClick={() => runCommand("underline")}><UnderlineIcon size={14}/></button>
           <span className="text-toolbar-divider"/>
           <button type="button" title="Bulleted list" onClick={() => runCommand("insertUnorderedList")}><BulletListIcon size={14}/></button>
           <button type="button" title="Numbered list" onClick={() => runCommand("insertOrderedList")}><NumberedListIcon size={14}/></button>
@@ -213,7 +231,7 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure 
         suppressContentEditableWarning
         data-placeholder="Write something…"
         spellCheck
-        onFocus={() => { setToolbarVisible(true); onActiveChange?.(true); onFocus(); }}
+        onFocus={() => { setToolbarVisible(true); onActiveChange?.(true); onFocus(); requestAnimationFrame(syncActiveFormats); }}
         onBlur={() => { setToolbarVisible(false); onActiveChange?.(false); }}
         onPointerDown={(event) => {
           if (event.button !== 0) return;
@@ -221,13 +239,16 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure 
           editorRef.current?.focus({ preventScroll: true });
           onFocus();
         }}
-        onInput={emitChange}
+        onInput={() => { emitChange(); syncActiveFormats(); }}
+        onKeyUp={syncActiveFormats}
+        onMouseUp={syncActiveFormats}
         onKeyDown={(event) => {
           if ((event.ctrlKey || event.metaKey) && ["b", "u"].includes(event.key.toLowerCase())) {
             event.preventDefault();
             const commands = { b: "bold", u: "underline" } as const;
             document.execCommand(commands[event.key.toLowerCase() as "b" | "u"]);
             emitChange();
+            syncActiveFormats();
             return;
           }
           if (event.key === "Tab" && !(event.ctrlKey || event.metaKey) && selectionBlock()?.closest("li")) {
