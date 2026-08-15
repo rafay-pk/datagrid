@@ -245,7 +245,7 @@ fn spreadsheet_content(card: &Value) -> String {
 
 fn basic_styles(font: &str) -> String {
     format!(r#"<?xml version="1.0" encoding="UTF-8"?>
-<office:document-styles xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" office:version="1.3"><office:font-face-decls><style:font-face style:name="DatagridFont" svg:font-family="{}"/></office:font-face-decls><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="DatagridFont"/></style:default-style><style:style style:name="Bold" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style><style:style style:name="Italic" style:family="text"><style:text-properties fo:font-style="italic"/></style:style><style:style style:name="BoldItalic" style:family="text"><style:text-properties fo:font-weight="bold" fo:font-style="italic"/></style:style><style:style style:name="Underline" style:family="text"><style:text-properties style:text-underline-style="solid" style:text-underline-width="auto" style:text-underline-color="font-color"/></style:style><text:list-style style:name="BulletList"><text:list-level-style-bullet text:level="1" text:bullet-char="•"/></text:list-style><text:list-style style:name="NumberList"><text:list-level-style-number text:level="1" style:num-format="1"/></text:list-style></office:styles></office:document-styles>"#, escape_xml(font))
+<office:document-styles xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" office:version="1.3"><office:font-face-decls><style:font-face style:name="DatagridFont" svg:font-family="{}"/></office:font-face-decls><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="DatagridFont"/></style:default-style><style:style style:name="ImageLabel" style:family="paragraph"><style:paragraph-properties fo:text-align="center"/></style:style><style:style style:name="Bold" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style><style:style style:name="Italic" style:family="text"><style:text-properties fo:font-style="italic"/></style:style><style:style style:name="BoldItalic" style:family="text"><style:text-properties fo:font-weight="bold" fo:font-style="italic"/></style:style><style:style style:name="Underline" style:family="text"><style:text-properties style:text-underline-style="solid" style:text-underline-width="auto" style:text-underline-color="font-color"/></style:style><text:list-style style:name="BulletList"><text:list-level-style-bullet text:level="1" text:bullet-char="•"/></text:list-style><text:list-style style:name="NumberList"><text:list-level-style-number text:level="1" style:num-format="1"/></text:list-style></office:styles></office:document-styles>"#, escape_xml(font))
 }
 
 fn build_odt(document: &Value) -> Result<Vec<u8>, String> {
@@ -273,6 +273,16 @@ fn build_odt(document: &Value) -> Result<Vec<u8>, String> {
                     let path = format!("Pictures/{id}.{}", extension_for_mime(mime));
                     assets.push((path.clone(), mime.to_string(), bytes));
                     body.push_str(&format!("<text:p><draw:frame draw:name=\"{}\" text:anchor-type=\"paragraph\" svg:width=\"14cm\" svg:height=\"9cm\"><draw:image xlink:href=\"{}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/></draw:frame></text:p>", escape_xml(card.get("fileName").and_then(Value::as_str).unwrap_or("Image")), escape_xml(&path)));
+                    if let Some(label) = card
+                        .get("label")
+                        .and_then(Value::as_str)
+                        .filter(|label| !label.trim().is_empty())
+                    {
+                        body.push_str(&format!(
+                            "<text:p text:style-name=\"ImageLabel\">{}</text:p>",
+                            escape_xml(label.trim())
+                        ));
+                    }
                 }
             }
             "spreadsheet" => {
@@ -607,6 +617,7 @@ mod tests {
                 {
                     "id": "image-one", "type": "image", "x": 1, "y": 0, "w": 1, "h": 1,
                     "color": "#ff5d73", "createdAt": "0", "fileName": "pixel.png", "mimeType": "image/png",
+                    "label": "Tiny pixel",
                     "naturalWidth": 1, "naturalHeight": 1,
                     "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
                 },
@@ -627,6 +638,7 @@ mod tests {
         let reopened = read_document(&path).unwrap();
         assert_eq!(reopened["name"], "Portable canvas");
         assert_eq!(reopened["cards"].as_array().unwrap().len(), 4);
+        assert_eq!(reopened["cards"][1]["label"], "Tiny pixel");
 
         let file = File::open(&path).unwrap();
         let mut archive = ZipArchive::new(file).unwrap();
@@ -636,6 +648,13 @@ mod tests {
         assert!(archive.by_name("Pictures/image-one.png").is_ok());
         assert!(archive.by_name("Objects/sheet-one/content.xml").is_ok());
         assert!(archive.by_name("META-INF/manifest.xml").is_ok());
+        let mut content_xml = String::new();
+        archive
+            .by_name("content.xml")
+            .unwrap()
+            .read_to_string(&mut content_xml)
+            .unwrap();
+        assert!(content_xml.contains("Tiny pixel"));
 
         drop(archive);
         fs::remove_dir_all(test_root).unwrap();

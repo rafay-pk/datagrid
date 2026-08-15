@@ -39,6 +39,7 @@ export interface TextCard extends CardBase {
 
 export interface ImageCard extends CardBase {
   type: "image";
+  label?: string;
   dataUrl: string;
   mimeType: string;
   fileName: string;

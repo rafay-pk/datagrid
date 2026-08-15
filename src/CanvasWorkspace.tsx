@@ -19,6 +19,7 @@ import {
   ZoomOutIcon,
 } from "./icons";
 import { SpreadsheetCard, spreadsheetToCsv } from "./SpreadsheetCard";
+import { ImageCardLabel } from "./ImageCardLabel";
 import { TextEditor } from "./TextEditor";
 import { blocksFromHtml, looksTabular, normalizeUrl, parseTable, plainTextFromBlocks } from "./textFormat";
 import {
@@ -93,6 +94,7 @@ function readImage(file: File): Promise<Omit<ImageCard, "id" | "x" | "y" | "colo
           dataUrl,
           mimeType: file.type || (file.name.toLowerCase().endsWith(".ico") ? "image/x-icon" : "application/octet-stream"),
           fileName: file.name,
+          label: "",
           naturalWidth: image.naturalWidth,
           naturalHeight: image.naturalHeight,
           ...size,
@@ -126,7 +128,7 @@ function cardMatchesSearch(card: CanvasCard, query: string): boolean {
   const needle = query.toLowerCase();
   if (card.type === "text") return plainTextFromBlocks(card.blocks).toLowerCase().includes(needle);
   if (card.type === "spreadsheet") return card.cells.flat().join(" ").toLowerCase().includes(needle);
-  if (card.type === "image") return card.fileName.toLowerCase().includes(needle);
+  if (card.type === "image") return `${card.label ?? ""} ${card.fileName}`.toLowerCase().includes(needle);
   return `${card.url} ${card.preview.title} ${card.preview.description}`.toLowerCase().includes(needle);
 }
 
@@ -151,6 +153,7 @@ export function CanvasWorkspace({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [focusedSheetId, setFocusedSheetId] = useState<string | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
+  const [editingImageLabelId, setEditingImageLabelId] = useState<string | null>(null);
   const [linkInputOpen, setLinkInputOpen] = useState(false);
   const [linkValue, setLinkValue] = useState("");
   const [sheetConfigOpen, setSheetConfigOpen] = useState(false);
@@ -375,6 +378,7 @@ export function CanvasWorkspace({
     commitCards(documentRef.current.cards.filter((card) => card.id !== id));
     setSelectedId((selected) => (selected === id ? null : selected));
     setFocusedSheetId((focused) => (focused === id ? null : focused));
+    setEditingImageLabelId((editing) => (editing === id ? null : editing));
   };
 
   const copyCardToClipboard = async (card: CanvasCard) => {
@@ -534,10 +538,15 @@ export function CanvasWorkspace({
       onPointerUp={(event) => {
         const interaction = interactionRef.current;
         if (!interaction) return;
+        const stationaryCardClick = interaction.type === "drag"
+          && Math.hypot(event.clientX - interaction.startX, event.clientY - interaction.startY) < 5
+          ? documentRef.current.cards.find((card) => card.id === interaction.cardId)
+          : undefined;
         if (interaction.type === "pan") finishViewport(viewport);
         else if (previewCards && JSON.stringify(previewCards) !== JSON.stringify(documentRef.current.cards)) commitCards(previewCards);
         interactionRef.current = null;
         setPreviewCards(null);
+        if (stationaryCardClick?.type === "image") setEditingImageLabelId(stationaryCardClick.id);
         try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* pointer capture may belong to a child */ }
       }}
       onPointerCancel={() => {
@@ -643,6 +652,7 @@ export function CanvasWorkspace({
           const selected = card.id === selectedId;
           const sheetFocused = card.id === focusedSheetId;
           const textEditing = card.id === editingTextId;
+          const imageLabelEditing = card.id === editingImageLabelId;
           const dimmed = Boolean(search.trim()) && !matchingIds.has(card.id);
           return (
             <article
@@ -656,11 +666,13 @@ export function CanvasWorkspace({
                 const readOnlySheetCell = card.type === "spreadsheet" && !sheetFocused && target.closest(".sheet-cell");
                 if (interactive && !readOnlySheetCell) return;
                 event.stopPropagation();
+                setEditingImageLabelId(null);
                 setSelectedId(card.id);
                 startCardInteraction(event, card, "drag");
               }}
               onDoubleClick={(event) => {
                 event.stopPropagation();
+                setEditingImageLabelId(null);
                 if (card.type === "spreadsheet") setFocusedSheetId(card.id);
                 focusCard(card);
               }}
@@ -680,7 +692,21 @@ export function CanvasWorkspace({
                   onMeasure={(metrics) => handleTextMeasure(card.id, metrics)}
                 />
               )}
-              {card.type === "image" && <img className="image-content" src={card.dataUrl} alt={card.fileName} draggable={false} />}
+              {card.type === "image" && (
+                <div className="image-card-media">
+                  <img className="image-content" src={card.dataUrl} alt={card.label || card.fileName} draggable={false} />
+                  <ImageCardLabel
+                    label={card.label ?? ""}
+                    editing={imageLabelEditing}
+                    onEdit={() => {
+                      setSelectedId(card.id);
+                      setEditingImageLabelId(card.id);
+                    }}
+                    onCommit={(label) => updateCard(card.id, (current) => current.type === "image" ? { ...current, label } : current)}
+                    onDone={() => setEditingImageLabelId((editing) => editing === card.id ? null : editing)}
+                  />
+                </div>
+              )}
               {card.type === "spreadsheet" && (
                 <SpreadsheetCard card={card} focused={sheetFocused} onChange={(next) => updateCard(card.id, () => next)} />
               )}
