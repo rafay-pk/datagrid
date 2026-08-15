@@ -579,20 +579,25 @@ export function CanvasWorkspace({
       }}
       onWheel={(event) => {
         event.preventDefault();
-        if (event.ctrlKey) {
-          const nextZoom = clampZoom(viewport.zoom * Math.exp(-event.deltaY * 0.0015));
+        const wheelDelta = event.deltaY !== 0 ? event.deltaY : event.deltaX;
+        if (event.altKey) {
+          setViewport((current) => ({ ...current, x: current.x - wheelDelta }));
+        } else if (event.shiftKey) {
+          setViewport((current) => ({ ...current, y: current.y - wheelDelta }));
+        } else {
           const bounds = event.currentTarget.getBoundingClientRect();
           const pointerX = event.clientX - bounds.left - bounds.width / 2;
           const pointerY = event.clientY - bounds.top - bounds.height / 2;
-          const ratio = nextZoom / viewport.zoom;
-          setViewport((current) => ({
-            ...current,
-            zoom: nextZoom,
-            x: pointerX - (pointerX - current.x) * ratio,
-            y: pointerY - (pointerY - current.y) * ratio,
-          }));
-        } else {
-          setViewport((current) => ({ ...current, x: current.x - event.deltaX, y: current.y - event.deltaY }));
+          setViewport((current) => {
+            const nextZoom = clampZoom(current.zoom * Math.exp(-wheelDelta * 0.0015));
+            const ratio = nextZoom / current.zoom;
+            return {
+              ...current,
+              zoom: nextZoom,
+              x: pointerX - (pointerX - current.x) * ratio,
+              y: pointerY - (pointerY - current.y) * ratio,
+            };
+          });
         }
       }}
       onPaste={(event) => {
