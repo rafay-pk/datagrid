@@ -7,6 +7,7 @@ import {
   CheckIcon,
   CopyIcon,
   DiceIcon,
+  DuplicateIcon,
   ExternalIcon,
   ImageIcon,
   LinkIcon,
@@ -17,7 +18,7 @@ import {
   ZoomInIcon,
   ZoomOutIcon,
 } from "./icons";
-import { SpreadsheetCard } from "./SpreadsheetCard";
+import { SpreadsheetCard, spreadsheetToCsv } from "./SpreadsheetCard";
 import { TextEditor } from "./TextEditor";
 import { blocksFromHtml, looksTabular, normalizeUrl, parseTable, plainTextFromBlocks } from "./textFormat";
 import {
@@ -103,6 +104,23 @@ function readImage(file: File): Promise<Omit<ImageCard, "id" | "x" | "y" | "colo
   });
 }
 
+function imageDataUrlToPngBlob(dataUrl: string): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onerror = () => reject(new Error("Could not decode image."));
+    image.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      const context = canvas.getContext("2d");
+      if (!context) { reject(new Error("Canvas unavailable.")); return; }
+      context.drawImage(image, 0, 0);
+      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("Could not encode PNG."))), "image/png");
+    };
+    image.src = dataUrl;
+  });
+}
+
 function cardMatchesSearch(card: CanvasCard, query: string): boolean {
   if (!query.trim()) return true;
   const needle = query.toLowerCase();
@@ -141,9 +159,11 @@ export function CanvasWorkspace({
   const [sheetOrigin, setSheetOrigin] = useState<{ x: number; y: number } | undefined>();
   const [notice, setNotice] = useState<string | null>(null);
   const [isFocusing, setIsFocusing] = useState(false);
+  const [copiedCardId, setCopiedCardId] = useState<string | null>(null);
   const lastRandomColorRef = useRef<string | null>(null);
   const textMinimumsRef = useRef(new Map<string, { w: number; h: number }>());
   const focusTimeoutRef = useRef<number | null>(null);
+  const copiedTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     documentRef.current = document;
@@ -357,6 +377,29 @@ export function CanvasWorkspace({
     setFocusedSheetId((focused) => (focused === id ? null : focused));
   };
 
+  const copyCardToClipboard = async (card: CanvasCard) => {
+    try {
+      if (card.type === "text") {
+        await navigator.clipboard.writeText(plainTextFromBlocks(card.blocks));
+      } else if (card.type === "link") {
+        await navigator.clipboard.writeText(card.url);
+      } else if (card.type === "spreadsheet") {
+        await navigator.clipboard.writeText(spreadsheetToCsv(card));
+      } else if (card.type === "image") {
+        const blob = await imageDataUrlToPngBlob(card.dataUrl);
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      }
+      setCopiedCardId(card.id);
+      if (copiedTimeoutRef.current !== null) window.clearTimeout(copiedTimeoutRef.current);
+      copiedTimeoutRef.current = window.setTimeout(() => {
+        setCopiedCardId(null);
+        copiedTimeoutRef.current = null;
+      }, 1200);
+    } catch {
+      setNotice("Couldn't copy to clipboard.");
+    }
+  };
+
   const startCardInteraction = (event: React.PointerEvent, card: CanvasCard, type: "drag" | "resize") => {
     event.preventDefault();
     event.stopPropagation();
@@ -381,6 +424,14 @@ export function CanvasWorkspace({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.target instanceof HTMLElement && (event.target.isContentEditable || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName))) return;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
+        const card = documentRef.current.cards.find((candidate) => candidate.id === selectedId);
+        if (card) {
+          event.preventDefault();
+          void copyCardToClipboard(card);
+          return;
+        }
+      }
       if (event.ctrlKey || event.metaKey || event.altKey) return;
       const shortcutTools: Partial<Record<string, Tool>> = {
         h: "select",
@@ -610,7 +661,8 @@ export function CanvasWorkspace({
               }}
             >
               <div className={`card-hover-tools${sheetFocused || textEditing ? " hidden" : ""}`}>
-                <button className="card-tool" title="Duplicate card" onClick={(event) => { event.stopPropagation(); duplicateCard(card); }}><CopyIcon size={16}/></button>
+                <button className="card-tool" title="Copy" onClick={(event) => { event.stopPropagation(); void copyCardToClipboard(card); }}>{copiedCardId === card.id ? <CheckIcon size={16}/> : <CopyIcon size={16}/>}</button>
+                <button className="card-tool" title="Duplicate card" onClick={(event) => { event.stopPropagation(); duplicateCard(card); }}><DuplicateIcon size={16}/></button>
                 <button className="card-tool danger-tool" title="Delete card" onClick={(event) => { event.stopPropagation(); deleteCard(card.id); }}><TrashIcon size={16}/></button>
               </div>
 

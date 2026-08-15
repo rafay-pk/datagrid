@@ -35,6 +35,7 @@ export const LinkIcon = (props: IconProps) => <IconBase {...props}><path d="M10 
 export const MoreIcon = (props: IconProps) => <IconBase {...props}><circle cx="5" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="19" cy="12" r="1" fill="currentColor"/></IconBase>;
 export const GripIcon = (props: IconProps) => <IconBase {...props}><circle cx="8" cy="7" r="1" fill="currentColor"/><circle cx="16" cy="7" r="1" fill="currentColor"/><circle cx="8" cy="12" r="1" fill="currentColor"/><circle cx="16" cy="12" r="1" fill="currentColor"/><circle cx="8" cy="17" r="1" fill="currentColor"/><circle cx="16" cy="17" r="1" fill="currentColor"/></IconBase>;
 export const CopyIcon = (props: IconProps) => <IconBase {...props}><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></IconBase>;
+export const DuplicateIcon = (props: IconProps) => <IconBase {...props}><rect x="3" y="3" width="13" height="13" rx="2"/><rect x="8" y="8" width="13" height="13" rx="2"/></IconBase>;
 export const TrashIcon = (props: IconProps) => <IconBase {...props}><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></IconBase>;
 export const UndoIcon = (props: IconProps) => <IconBase {...props}><path d="M9 7 4 12l5 5M5 12h8a6 6 0 0 1 6 6"/></IconBase>;
 export const RedoIcon = (props: IconProps) => <IconBase {...props}><path d="m15 7 5 5-5 5M19 12h-8a6 6 0 0 0-6 6"/></IconBase>;
