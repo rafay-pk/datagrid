@@ -142,6 +142,31 @@ function shownValue(cells: string[][], row: number, column: number, focused: boo
   return focused ? value : displayValue(value, cells);
 }
 
+function csvField(value: string): string {
+  return /[",\n\r]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
+export function spreadsheetToCsv(card: SpreadsheetCardType): string {
+  const cells = Array.from({ length: card.rows }, (_, row) =>
+    Array.from({ length: card.columns }, (_, column) => card.cells[row]?.[column] ?? ""));
+  const values = cells.map((row, rowIndex) =>
+    row.map((_, column) => shownValue(cells, rowIndex, column, false)));
+
+  let lastRow = -1;
+  let lastColumn = -1;
+  values.forEach((row, rowIndex) => row.forEach((value, column) => {
+    if (value === "") return;
+    if (rowIndex > lastRow) lastRow = rowIndex;
+    if (column > lastColumn) lastColumn = column;
+  }));
+  if (lastRow === -1 || lastColumn === -1) return "";
+
+  return values
+    .slice(0, lastRow + 1)
+    .map((row) => row.slice(0, lastColumn + 1).map(csvField).join(","))
+    .join("\r\n");
+}
+
 export function SpreadsheetCard({ card, focused, onChange }: SpreadsheetCardProps) {
   const [activeCell, setActiveCell] = useState<CellPosition | null>(null);
   const activeInputRef = useRef<HTMLInputElement | null>(null);
