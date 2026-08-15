@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { fetchLinkPreview } from "./api";
 import { averageImageAccent } from "./color";
-import { clampZoom, firstFreePosition, overlaps, reflowCards } from "./grid";
+import { clampZoom, firstFreePosition, overlaps, reflowCardGroup, reflowCards } from "./grid";
 import {
   CheckIcon,
   CopyIcon,
@@ -52,13 +52,30 @@ interface CanvasWorkspaceProps {
 type Interaction =
   | {
       type: "pan";
+      button: number;
       startX: number;
       startY: number;
       originX: number;
       originY: number;
     }
   | {
-      type: "drag" | "resize";
+      type: "box-select";
+      button: number;
+      startX: number;
+      startY: number;
+    }
+  | {
+      type: "drag";
+      button: number;
+      cardId: string;
+      startX: number;
+      startY: number;
+      origin: GridRect;
+      groupOrigins: Map<string, GridRect>;
+    }
+  | {
+      type: "resize";
+      button: number;
       cardId: string;
       startX: number;
       startY: number;
@@ -151,6 +168,8 @@ export function CanvasWorkspace({
   const [viewport, setViewport] = useState(document.viewport);
   const [previewCards, setPreviewCards] = useState<CanvasCard[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectionRect, setSelectionRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const [focusedSheetId, setFocusedSheetId] = useState<string | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [editingImageLabelId, setEditingImageLabelId] = useState<string | null>(null);
@@ -167,6 +186,9 @@ export function CanvasWorkspace({
   const textMinimumsRef = useRef(new Map<string, { w: number; h: number }>());
   const focusTimeoutRef = useRef<number | null>(null);
   const copiedTimeoutRef = useRef<number | null>(null);
+  const suppressContextMenuRef = useRef(false);
+  const suppressCanvasClickRef = useRef(false);
+  const contextMenuTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     documentRef.current = document;
@@ -174,6 +196,7 @@ export function CanvasWorkspace({
 
   useEffect(() => () => {
     if (focusTimeoutRef.current !== null) window.clearTimeout(focusTimeoutRef.current);
+    if (contextMenuTimeoutRef.current !== null) window.clearTimeout(contextMenuTimeoutRef.current);
   }, []);
 
   useEffect(() => {
@@ -407,15 +430,26 @@ export function CanvasWorkspace({
   const startCardInteraction = (event: React.PointerEvent, card: CanvasCard, type: "drag" | "resize") => {
     event.preventDefault();
     event.stopPropagation();
+    const movingIds = type === "drag" && selectedIds.has(card.id) ? selectedIds : new Set([card.id]);
     setSelectedId(card.id);
+    setSelectedIds(movingIds);
     if (type === "drag") setFocusedSheetId(null);
-    interactionRef.current = {
-      type,
+    const interactionBase = {
+      button: event.button,
       cardId: card.id,
       startX: event.clientX,
       startY: event.clientY,
       origin: { x: card.x, y: card.y, w: card.w, h: card.h },
     };
+    interactionRef.current = type === "drag"
+      ? {
+        ...interactionBase,
+        type: "drag",
+        groupOrigins: new Map(documentRef.current.cards
+          .filter((candidate) => movingIds.has(candidate.id))
+          .map((candidate) => [candidate.id, { x: candidate.x, y: candidate.y, w: candidate.w, h: candidate.h }])),
+      }
+      : { ...interactionBase, type: "resize" };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
@@ -454,6 +488,7 @@ export function CanvasWorkspace({
       if (event.key === "Escape") {
         setFocusedSheetId(null);
         setSelectedId(null);
+        setSelectedIds(new Set());
         onToolChange("select");
       }
     };
@@ -511,6 +546,9 @@ export function CanvasWorkspace({
         lastPointerRef.current = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
         const interaction = interactionRef.current;
         if (!interaction) return;
+        if (interaction.button === 2 && Math.hypot(event.clientX - interaction.startX, event.clientY - interaction.startY) >= 5) {
+          suppressContextMenuRef.current = true;
+        }
         if (interaction.type === "pan") {
           setViewport((current) => ({
             ...current,
@@ -519,10 +557,42 @@ export function CanvasWorkspace({
           }));
           return;
         }
+        if (interaction.type === "box-select") {
+          if (Math.hypot(event.clientX - interaction.startX, event.clientY - interaction.startY) >= 5) {
+            suppressCanvasClickRef.current = true;
+          }
+          const left = Math.min(interaction.startX, event.clientX) - bounds.left;
+          const top = Math.min(interaction.startY, event.clientY) - bounds.top;
+          const right = Math.max(interaction.startX, event.clientX) - bounds.left;
+          const bottom = Math.max(interaction.startY, event.clientY) - bounds.top;
+          setSelectionRect({ left, top, width: right - left, height: bottom - top });
+          const worldLeft = (left - bounds.width / 2 - viewport.x) / viewport.zoom;
+          const worldTop = (top - bounds.height / 2 - viewport.y) / viewport.zoom;
+          const worldRight = (right - bounds.width / 2 - viewport.x) / viewport.zoom;
+          const worldBottom = (bottom - bounds.height / 2 - viewport.y) / viewport.zoom;
+          const nextSelection = new Set(documentRef.current.cards.filter((card) => {
+            const cardLeft = card.x * stride + GRID_GAP / 2;
+            const cardTop = card.y * stride + GRID_GAP / 2;
+            const cardRight = cardLeft + card.w * stride - GRID_GAP;
+            const cardBottom = cardTop + card.h * stride - GRID_GAP;
+            return cardLeft < worldRight && cardRight > worldLeft && cardTop < worldBottom && cardBottom > worldTop;
+          }).map((card) => card.id));
+          setSelectedIds(nextSelection);
+          setSelectedId(nextSelection.values().next().value ?? null);
+          return;
+        }
         const dx = Math.round((event.clientX - interaction.startX) / viewport.zoom / stride);
         const dy = Math.round((event.clientY - interaction.startY) / viewport.zoom / stride);
         let target: GridRect;
         if (interaction.type === "drag") {
+          if (interaction.groupOrigins.size > 1) {
+            const targets = new Map(Array.from(interaction.groupOrigins, ([id, origin]) => [
+              id,
+              { ...origin, x: origin.x + dx, y: origin.y + dy },
+            ]));
+            setPreviewCards(reflowCardGroup(documentRef.current.cards, targets, { x: dx, y: dy }));
+            return;
+          }
           target = { ...interaction.origin, x: interaction.origin.x + dx, y: interaction.origin.y + dy };
         } else {
           const source = documentRef.current.cards.find((card) => card.id === interaction.cardId);
@@ -538,38 +608,59 @@ export function CanvasWorkspace({
       onPointerUp={(event) => {
         const interaction = interactionRef.current;
         if (!interaction) return;
-        const stationaryCardClick = interaction.type === "drag"
-          && Math.hypot(event.clientX - interaction.startX, event.clientY - interaction.startY) < 5
-          ? documentRef.current.cards.find((card) => card.id === interaction.cardId)
-          : undefined;
         if (interaction.type === "pan") finishViewport(viewport);
-        else if (previewCards && JSON.stringify(previewCards) !== JSON.stringify(documentRef.current.cards)) commitCards(previewCards);
+        else if (interaction.type !== "box-select" && previewCards && JSON.stringify(previewCards) !== JSON.stringify(documentRef.current.cards)) commitCards(previewCards);
         interactionRef.current = null;
         setPreviewCards(null);
-        if (stationaryCardClick?.type === "image") setEditingImageLabelId(stationaryCardClick.id);
+        setSelectionRect(null);
+        if (interaction.button === 2) {
+          if (contextMenuTimeoutRef.current !== null) window.clearTimeout(contextMenuTimeoutRef.current);
+          contextMenuTimeoutRef.current = window.setTimeout(() => { suppressContextMenuRef.current = false; }, 500);
+        }
         try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* pointer capture may belong to a child */ }
       }}
       onPointerCancel={() => {
         interactionRef.current = null;
         setPreviewCards(null);
+        setSelectionRect(null);
       }}
       onPointerDown={(event) => {
-        if (event.target !== event.currentTarget && !(event.target as HTMLElement).classList.contains("canvas-world")) return;
-        if (event.button === 1 || tool === "select") {
+        if (event.button === 1 || event.button === 2) {
           interactionRef.current = {
             type: "pan",
+            button: event.button,
             startX: event.clientX,
             startY: event.clientY,
             originX: viewport.x,
             originY: viewport.y,
           };
           event.currentTarget.setPointerCapture(event.pointerId);
+          return;
+        }
+        if (event.target !== event.currentTarget && !(event.target as HTMLElement).classList.contains("canvas-world")) return;
+        if (tool !== "select") return;
+        if (event.button === 0) {
+          interactionRef.current = { type: "box-select", button: event.button, startX: event.clientX, startY: event.clientY };
+          setSelectedId(null);
+          setSelectedIds(new Set());
+          setFocusedSheetId(null);
+          event.currentTarget.setPointerCapture(event.pointerId);
         }
       }}
+      onContextMenu={(event) => {
+        if (!suppressContextMenuRef.current) return;
+        event.preventDefault();
+        suppressContextMenuRef.current = false;
+      }}
       onClick={(event) => {
+        if (suppressCanvasClickRef.current) {
+          suppressCanvasClickRef.current = false;
+          return;
+        }
         if (event.target !== event.currentTarget && !(event.target as HTMLElement).classList.contains("canvas-world")) return;
         if (tool === "select") {
           setSelectedId(null);
+          setSelectedIds(new Set());
           setFocusedSheetId(null);
           return;
         }
@@ -644,12 +735,13 @@ export function CanvasWorkspace({
         "--grid-y": `calc(50% + ${viewport.y + stride * viewport.zoom / 2}px)`,
       } as React.CSSProperties}
     >
+      {selectionRect && <div className="canvas-selection-box" style={selectionRect} />}
       <div
         className={`canvas-world${isFocusing ? " is-focusing" : ""}${editingTextId ? " is-text-editing" : ""}`}
         style={{ transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})` }}
       >
         {cards.map((card) => {
-          const selected = card.id === selectedId;
+          const selected = selectedIds.has(card.id) || card.id === selectedId;
           const sheetFocused = card.id === focusedSheetId;
           const textEditing = card.id === editingTextId;
           const imageLabelEditing = card.id === editingImageLabelId;
@@ -667,7 +759,6 @@ export function CanvasWorkspace({
                 if (interactive && !readOnlySheetCell) return;
                 event.stopPropagation();
                 setEditingImageLabelId(null);
-                setSelectedId(card.id);
                 startCardInteraction(event, card, "drag");
               }}
               onDoubleClick={(event) => {
