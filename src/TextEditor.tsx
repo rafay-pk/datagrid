@@ -32,6 +32,35 @@ function placeCursorAtEnd(element: HTMLElement): void {
   selection?.addRange(range);
 }
 
+function splitListItemAtSelection(listItem: HTMLLIElement, isChecklist: boolean): void {
+  const selection = window.getSelection();
+  if (!selection?.rangeCount) return;
+
+  const activeRange = selection.getRangeAt(0);
+  if (!activeRange.collapsed) activeRange.deleteContents();
+
+  const trailingRange = document.createRange();
+  trailingRange.setStart(activeRange.startContainer, activeRange.startOffset);
+  trailingRange.setEnd(listItem, listItem.childNodes.length);
+  const trailingContent = trailingRange.extractContents();
+  trailingContent.querySelectorAll(".checklist-marker").forEach((marker) => marker.remove());
+
+  const nextItem = isChecklist ? createChecklistItem() : document.createElement("li");
+  if (isChecklist) nextItem.lastChild?.remove();
+  nextItem.appendChild(trailingContent);
+  if (!nextItem.textContent && !nextItem.querySelector("img, br")) nextItem.appendChild(document.createElement("br"));
+  if (!listItem.textContent && !listItem.querySelector("img, br")) listItem.appendChild(document.createElement("br"));
+  listItem.insertAdjacentElement("afterend", nextItem);
+
+  const cursorRange = document.createRange();
+  const marker = isChecklist ? nextItem.querySelector(".checklist-marker") : null;
+  if (marker) cursorRange.setStartAfter(marker);
+  else cursorRange.selectNodeContents(nextItem);
+  cursorRange.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(cursorRange);
+}
+
 function createChecklistMarker(): HTMLSpanElement {
   const marker = document.createElement("span");
   marker.className = "checklist-marker";
@@ -277,7 +306,7 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure 
             const listItem = block?.closest("li");
             if (listItem) {
               event.preventDefault();
-              const isChecklist = listItem.closest("ul")?.classList.contains("checklist");
+              const isChecklist = Boolean(listItem.closest("ul")?.classList.contains("checklist"));
               if (!(listItem.textContent ?? "").trim()) {
                 const paragraph = document.createElement("div");
                 paragraph.innerHTML = "<br>";
@@ -285,10 +314,7 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure 
                 listItem.remove();
                 placeCursorAtEnd(paragraph);
               } else {
-                const nextItem = isChecklist ? createChecklistItem() : document.createElement("li");
-                if (!isChecklist) nextItem.innerHTML = "<br>";
-                listItem.insertAdjacentElement("afterend", nextItem);
-                placeCursorAtEnd(nextItem);
+                splitListItemAtSelection(listItem, isChecklist);
               }
               emitChange();
               return;
