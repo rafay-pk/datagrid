@@ -197,8 +197,8 @@ export function CanvasWorkspace({
     if (!surface) return { x: 0, y: 0 };
     const point = lastPointerRef.current ?? { x: surface.clientWidth / 2, y: surface.clientHeight / 2 };
     return {
-      x: Math.round((point.x - surface.clientWidth / 2 - viewport.x) / viewport.zoom / stride),
-      y: Math.round((point.y - surface.clientHeight / 2 - viewport.y) / viewport.zoom / stride),
+      x: Math.floor((point.x - surface.clientWidth / 2 - viewport.x) / viewport.zoom / stride),
+      y: Math.floor((point.y - surface.clientHeight / 2 - viewport.y) / viewport.zoom / stride),
     };
   };
 
@@ -515,8 +515,8 @@ export function CanvasWorkspace({
         }
         const bounds = event.currentTarget.getBoundingClientRect();
         const origin = {
-          x: Math.round((event.clientX - bounds.left - bounds.width / 2 - viewport.x) / viewport.zoom / stride),
-          y: Math.round((event.clientY - bounds.top - bounds.height / 2 - viewport.y) / viewport.zoom / stride),
+          x: Math.floor((event.clientX - bounds.left - bounds.width / 2 - viewport.x) / viewport.zoom / stride),
+          y: Math.floor((event.clientY - bounds.top - bounds.height / 2 - viewport.y) / viewport.zoom / stride),
         };
         if (tool === "text") addText(origin);
         if (tool === "spreadsheet") {
@@ -567,8 +567,8 @@ export function CanvasWorkspace({
         event.preventDefault();
         const bounds = event.currentTarget.getBoundingClientRect();
         const origin = {
-          x: Math.round((event.clientX - bounds.left - bounds.width / 2 - viewport.x) / viewport.zoom / stride),
-          y: Math.round((event.clientY - bounds.top - bounds.height / 2 - viewport.y) / viewport.zoom / stride),
+          x: Math.floor((event.clientX - bounds.left - bounds.width / 2 - viewport.x) / viewport.zoom / stride),
+          y: Math.floor((event.clientY - bounds.top - bounds.height / 2 - viewport.y) / viewport.zoom / stride),
         };
         void addImageFiles(event.dataTransfer.files, origin);
       }}
