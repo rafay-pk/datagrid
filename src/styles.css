@@ -193,6 +193,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, [contenteditabl
 .canvas-surface.is-panning { cursor: grabbing; }
 .canvas-surface.tool-text, .canvas-surface.tool-image, .canvas-surface.tool-spreadsheet, .canvas-surface.tool-link { cursor: crosshair; }
 .canvas-world { position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform-origin: 0 0; will-change: transform; }
+.canvas-selection-box { position: absolute; z-index: 45; border: 1px solid color-mix(in srgb, var(--primary) 78%, white); border-radius: .3rem; background: color-mix(in srgb, var(--primary) 14%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 18%, transparent); pointer-events: none; }
 .canvas-world.is-focusing { transition: transform .34s cubic-bezier(.2,.8,.2,1); }
 .canvas-world.is-text-editing { will-change: auto; }
 
