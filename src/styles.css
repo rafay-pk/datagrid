@@ -203,6 +203,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, [contenteditabl
 :root[data-theme="dark"] .grid-card:hover, :root[data-theme="dark"] .grid-card.is-selected { box-shadow: 0 2px 3px rgba(0,0,0,.3), 0 18px 42px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.08); }
 .grid-card.is-selected { outline: 2px solid #858d96; outline-offset: 3px; }
 :root[data-theme="dark"] .grid-card.is-selected { outline-color: #808996; }
+.grid-card.is-group-selected { outline: 2px solid var(--primary); outline-offset: 3px; }
+.grid-card.is-group-selected .card-hover-tools, .grid-card.is-group-selected .resize-handle { opacity: 0 !important; pointer-events: none !important; }
+.group-drag-shield { position: absolute; z-index: 30; inset: 0; border-radius: inherit; cursor: grab; }
+.group-drag-shield:active { cursor: grabbing; }
 .grid-card.is-search-dimmed { opacity: 0.16; filter: saturate(.2); }
 .grid-card.sheet-focused-card { z-index: 120; min-width: 480px; min-height: 320px; box-shadow: 0 28px 80px rgba(21,27,42,.28), 0 3px 8px rgba(21,27,42,.13); }
 .card-hover-tools { position: absolute; z-index: 15; display: flex; gap: 0.18rem; top: -2.3rem; left: 0.5rem; padding: 0.23rem; border: 1px solid var(--border); border-radius: 0.65rem; background: var(--surface); box-shadow: var(--shadow-small); opacity: 0; transform: translateY(4px); pointer-events: none; transition: .15s ease; }

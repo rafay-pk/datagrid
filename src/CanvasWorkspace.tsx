@@ -169,6 +169,7 @@ export function CanvasWorkspace({
   const [previewCards, setPreviewCards] = useState<CanvasCard[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [marqueeSelection, setMarqueeSelection] = useState(false);
   const [selectionRect, setSelectionRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const [focusedSheetId, setFocusedSheetId] = useState<string | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
@@ -489,6 +490,7 @@ export function CanvasWorkspace({
         setFocusedSheetId(null);
         setSelectedId(null);
         setSelectedIds(new Set());
+        setMarqueeSelection(false);
         onToolChange("select");
       }
     };
@@ -643,6 +645,7 @@ export function CanvasWorkspace({
           interactionRef.current = { type: "box-select", button: event.button, startX: event.clientX, startY: event.clientY };
           setSelectedId(null);
           setSelectedIds(new Set());
+          setMarqueeSelection(true);
           setFocusedSheetId(null);
           event.currentTarget.setPointerCapture(event.pointerId);
         }
@@ -661,6 +664,7 @@ export function CanvasWorkspace({
         if (tool === "select") {
           setSelectedId(null);
           setSelectedIds(new Set());
+          setMarqueeSelection(false);
           setFocusedSheetId(null);
           return;
         }
@@ -742,13 +746,14 @@ export function CanvasWorkspace({
       >
         {cards.map((card) => {
           const selected = selectedIds.has(card.id) || card.id === selectedId;
+          const marqueeSelected = marqueeSelection && selectedIds.has(card.id);
           const sheetFocused = card.id === focusedSheetId;
           const textEditing = card.id === editingTextId;
           const imageLabelEditing = card.id === editingImageLabelId;
           const dimmed = Boolean(search.trim()) && !matchingIds.has(card.id);
           return (
             <article
-              className={`grid-card card-${card.type}${selected && !sheetFocused ? " is-selected" : ""}${sheetFocused ? " sheet-focused-card" : ""}${dimmed ? " is-search-dimmed" : ""}`}
+              className={`grid-card card-${card.type}${selected && !marqueeSelected && !sheetFocused ? " is-selected" : ""}${marqueeSelected ? " is-group-selected" : ""}${sheetFocused ? " sheet-focused-card" : ""}${dimmed ? " is-search-dimmed" : ""}`}
               style={cardSize(card)}
               key={card.id}
               onPointerDown={(event) => {
@@ -759,6 +764,7 @@ export function CanvasWorkspace({
                 if (interactive && !readOnlySheetCell) return;
                 event.stopPropagation();
                 setEditingImageLabelId(null);
+                setMarqueeSelection(false);
                 startCardInteraction(event, card, "drag");
               }}
               onDoubleClick={(event) => {
@@ -768,6 +774,16 @@ export function CanvasWorkspace({
                 focusCard(card);
               }}
             >
+              {marqueeSelected && (
+                <div
+                  className="group-drag-shield"
+                  onPointerDown={(event) => {
+                    if (event.button !== 0) return;
+                    setEditingImageLabelId(null);
+                    startCardInteraction(event, card, "drag");
+                  }}
+                />
+              )}
               <div className={`card-hover-tools${sheetFocused || textEditing ? " hidden" : ""}`}>
                 <button className="card-tool" title="Copy" onClick={(event) => { event.stopPropagation(); void copyCardToClipboard(card); }}>{copiedCardId === card.id ? <CheckIcon size={16}/> : <CopyIcon size={16}/>}</button>
                 <button className="card-tool" title="Duplicate card" onClick={(event) => { event.stopPropagation(); duplicateCard(card); }}><DuplicateIcon size={16}/></button>
