@@ -283,8 +283,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, [contenteditabl
 .link-preview-image { width: 38%; height: 100%; object-fit: cover; border-right: 1px solid var(--border); }
 .link-preview-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; justify-content: center; padding: 1rem 1.1rem 1.15rem; }
 .link-domain { margin-bottom: .42rem; color: var(--card-accent); font-size: .65rem; font-weight: 760; letter-spacing: .06em; text-transform: uppercase; }
-.link-preview strong { display: -webkit-box; overflow: hidden; font-size: 1.08rem; line-height: 1.2; letter-spacing: -.02em; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.link-description { display: -webkit-box; margin-top: .42rem; overflow: hidden; color: var(--text-muted); font-size: .73rem; line-height: 1.35; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.link-preview strong { display: -webkit-box; overflow: hidden; font-size: 1.08rem; line-height: 1.2; letter-spacing: -.02em; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; }
+.link-description { display: -webkit-box; margin-top: .42rem; overflow: hidden; color: var(--text-muted); font-size: .73rem; line-height: 1.35; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; }
 .link-url { margin-top: .6rem; overflow: hidden; color: var(--text-faint); font-size: .64rem; text-overflow: ellipsis; white-space: nowrap; }
 .open-link-button { position: absolute; z-index: 3; top: .65rem; right: .65rem; display: flex; align-items: center; gap: .35rem; min-height: 2rem; padding: 0 .65rem; border: 1px solid var(--border-strong); border-radius: .55rem; color: var(--text); background: var(--surface-raised); box-shadow: var(--shadow-small); opacity: 0; transform: translateY(3px); pointer-events: none; cursor: pointer; transition: opacity .14s ease, transform .14s ease; }
 .link-preview:hover .open-link-button, .open-link-button:focus-visible { opacity: 1; transform: translateY(0); pointer-events: auto; }
