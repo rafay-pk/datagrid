@@ -41,6 +41,11 @@ import "./styles.css";
 
 const SESSION_KEY = "datagrid-session-v1";
 const CANVAS_EMOJIS = ["🗂️", "📝", "💡", "🎯", "📚", "🧠", "🧪", "🎨", "🚀", "🌱", "⭐", "❤️", "🔥", "📌", "🏠", "💼"];
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+function firstGrapheme(value: string): string {
+  return graphemeSegmenter.segment(value.trim())[Symbol.iterator]().next().value?.segment ?? "";
+}
 
 const defaultSession: SessionState = {
   libraryFolder: "",
@@ -390,10 +395,11 @@ export default function App() {
   };
 
   const applyCanvasEmoji = (emoji: string) => {
-    if (!activeCanvas || !emoji.trim()) return;
+    const nextEmoji = firstGrapheme(emoji);
+    if (!activeCanvas || !nextEmoji) return;
     updateActiveDocument({
       ...activeCanvas.document,
-      emoji: emoji.trim(),
+      emoji: nextEmoji,
       updatedAt: new Date().toISOString(),
     });
     setCustomEmoji("");
@@ -513,7 +519,12 @@ export default function App() {
                   ))}
                 </div>
                 <form onSubmit={(event) => { event.preventDefault(); applyCanvasEmoji(customEmoji); }}>
-                  <input value={customEmoji} onChange={(event) => setCustomEmoji(event.currentTarget.value)} placeholder="Custom emoji" maxLength={12}/>
+                  <input
+                    value={customEmoji}
+                    onChange={(event) => setCustomEmoji(firstGrapheme(event.currentTarget.value))}
+                    placeholder="Custom emoji"
+                    aria-label="Custom emoji"
+                  />
                   <button type="submit" disabled={!customEmoji.trim()}>Use</button>
                 </form>
               </div>

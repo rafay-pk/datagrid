@@ -156,14 +156,37 @@ function sanitizeClipboardHtml(html: string): string {
       }
     }
   }
+
+  const textNodes: Text[] = [];
+  const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) textNodes.push(walker.currentNode as Text);
+  for (const node of textNodes) {
+    node.data = node.data.replace(/^[\s\u00a0]+/u, "");
+    if (node.data) break;
+  }
+  for (let index = textNodes.length - 1; index >= 0; index -= 1) {
+    const node = textNodes[index];
+    node.data = node.data.replace(/[\s\u00a0]+$/u, "");
+    if (node.data) break;
+  }
+  while (template.content.firstChild && !(template.content.firstChild.textContent ?? "").trim()) {
+    template.content.firstChild.remove();
+  }
+  while (template.content.lastChild && !(template.content.lastChild.textContent ?? "").trim()) {
+    template.content.lastChild.remove();
+  }
   return template.innerHTML;
 }
 
 export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure }: TextEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   const measureFrameRef = useRef<number | null>(null);
+  const inputEventCountRef = useRef(0);
+  const onMeasureRef = useRef(onMeasure);
   const [toolbarVisible, setToolbarVisible] = useState(false);
   const [activeFormats, setActiveFormats] = useState({ heading: false, bold: false, italic: false, underline: false });
+
+  onMeasureRef.current = onMeasure;
 
   const syncActiveFormats = () => {
     const editor = editorRef.current;
@@ -187,7 +210,7 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure 
     editor.style.height = "0px";
     const contentHeight = editor.scrollHeight;
     editor.style.height = previousHeight;
-    onMeasure({
+    onMeasureRef.current({
       scrollHeight: contentHeight,
       clientHeight: editor.clientHeight,
       maxLineLength: Math.max(0, ...lines.map((line) => line.length)),
@@ -195,12 +218,30 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure 
     });
   };
 
-  useEffect(() => {
+  const scheduleMeasure = () => {
+    if (measureFrameRef.current !== null) cancelAnimationFrame(measureFrameRef.current);
+    measureFrameRef.current = requestAnimationFrame(() => {
+      measureFrameRef.current = null;
+      measure();
+    });
+  };
+
+  useLayoutEffect(() => {
     const editor = editorRef.current;
-    if (editor && editor.innerHTML !== html && document.activeElement !== editor) {
+    if (editor && editor.innerHTML !== html) {
+      const restoreFocus = document.activeElement === editor;
       editor.innerHTML = html;
+      if (restoreFocus) placeCursorAtEnd(editor);
     }
   }, [html]);
+
+  useLayoutEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const observer = new ResizeObserver(() => measure());
+    observer.observe(editor);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => () => {
     if (measureFrameRef.current !== null) cancelAnimationFrame(measureFrameRef.current);
@@ -220,11 +261,7 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure 
     if (!editor) return;
     maybeTransformMarker(editor);
     onChange(editor.innerHTML, blocksFromHtml(editor.innerHTML));
-    if (measureFrameRef.current !== null) cancelAnimationFrame(measureFrameRef.current);
-    measureFrameRef.current = requestAnimationFrame(() => {
-      measureFrameRef.current = null;
-      measure();
-    });
+    scheduleMeasure();
   };
 
   const runCommand = (command: string) => {
@@ -284,7 +321,11 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure 
           editorRef.current?.focus({ preventScroll: true });
           onFocus();
         }}
-        onInput={() => { emitChange(); syncActiveFormats(); }}
+        onInput={() => {
+          inputEventCountRef.current += 1;
+          emitChange();
+          syncActiveFormats();
+        }}
         onKeyUp={syncActiveFormats}
         onMouseUp={syncActiveFormats}
         onKeyDown={(event) => {
@@ -331,8 +372,9 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure 
         }}
         onPaste={(event) => {
           event.stopPropagation();
-          const text = event.clipboardData.getData("text/plain");
+          const text = event.clipboardData.getData("text/plain").trim();
           const url = normalizeUrl(text);
+          const inputEventCount = inputEventCountRef.current;
           event.preventDefault();
           if (url) {
             document.execCommand(
@@ -345,7 +387,7 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure 
             if (rich) document.execCommand("insertHTML", false, sanitizeClipboardHtml(rich));
             else document.execCommand("insertText", false, text);
           }
-          emitChange();
+          if (inputEventCountRef.current === inputEventCount) emitChange();
         }}
         onClick={(event) => {
           const marker = (event.target as HTMLElement).closest(".checklist-marker");
