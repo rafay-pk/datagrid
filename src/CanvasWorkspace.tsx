@@ -85,12 +85,30 @@ type Interaction =
       startX: number;
       startY: number;
       origin: GridRect;
+    }
+  | {
+      type: "create";
+      button: number;
+      tool: Exclude<Tool, "select">;
+      start: { x: number; y: number };
+      placement: CreationPlacement;
     };
+
+interface CreationPlacement {
+  rect: GridRect;
+  direction: { x: number; y: number };
+  color: string;
+}
+
+interface CreationPreview extends CreationPlacement {
+  tool: Exclude<Tool, "select">;
+  active: boolean;
+}
 
 const stride = GRID_UNIT + GRID_GAP;
 const FOCUS_PADDING = 96;
 
-function cardSize(card: CanvasCard): React.CSSProperties {
+function cardSize(card: GridRect & { color: string }): React.CSSProperties {
   return {
     left: card.x * stride + GRID_GAP / 2,
     top: card.y * stride + GRID_GAP / 2,
@@ -98,6 +116,14 @@ function cardSize(card: CanvasCard): React.CSSProperties {
     height: card.h * GRID_UNIT + (card.h - 1) * GRID_GAP,
     "--card-accent": card.color,
   } as React.CSSProperties;
+}
+
+function CreationToolIcon({ tool }: { tool: Exclude<Tool, "select"> }) {
+  if (tool === "text") return <TextIcon size={30} />;
+  if (tool === "code") return <CodeIcon size={30} />;
+  if (tool === "image") return <ImageIcon size={30} />;
+  if (tool === "spreadsheet") return <SheetIcon size={30} />;
+  return <LinkIcon size={30} />;
 }
 
 type NewImageCard = Omit<ImageCard, "id" | "x" | "y" | "color" | "createdAt">;
@@ -199,6 +225,8 @@ export function CanvasWorkspace({
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   const [viewport, setViewport] = useState(document.viewport);
   const [previewCards, setPreviewCards] = useState<CanvasCard[] | null>(null);
+  const [creationPreview, setCreationPreview] = useState<CreationPreview | null>(null);
+  const [pendingPlacement, setPendingPlacement] = useState<(CreationPreview & { active: true }) | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [marqueeSelection, setMarqueeSelection] = useState(false);
@@ -208,10 +236,6 @@ export function CanvasWorkspace({
   const [editingImageLabelId, setEditingImageLabelId] = useState<string | null>(null);
   const [linkInputOpen, setLinkInputOpen] = useState(false);
   const [linkValue, setLinkValue] = useState("");
-  const [sheetConfigOpen, setSheetConfigOpen] = useState(false);
-  const [sheetRows, setSheetRows] = useState(4);
-  const [sheetColumns, setSheetColumns] = useState(3);
-  const [sheetOrigin, setSheetOrigin] = useState<{ x: number; y: number } | undefined>();
   const [notice, setNotice] = useState<string | null>(null);
   const [isFocusing, setIsFocusing] = useState(false);
   const [copiedCardId, setCopiedCardId] = useState<string | null>(null);
@@ -233,6 +257,17 @@ export function CanvasWorkspace({
   }, []);
 
   useEffect(() => {
+    const input = imageInputRef.current;
+    if (!input) return;
+    const handleCancel = () => {
+      setPendingPlacement(null);
+      onToolChange("select");
+    };
+    input.addEventListener("cancel", handleCancel);
+    return () => input.removeEventListener("cancel", handleCancel);
+  }, [onToolChange]);
+
+  useEffect(() => {
     setViewport(document.viewport);
   }, [document.id, document.viewport.x, document.viewport.y, document.viewport.zoom]);
 
@@ -241,10 +276,8 @@ export function CanvasWorkspace({
       setLinkInputOpen(false);
       setLinkValue("");
     }
-    if (tool !== "spreadsheet") {
-      setSheetConfigOpen(false);
-      setSheetOrigin(undefined);
-    }
+    setCreationPreview(null);
+    setPendingPlacement((current) => current?.tool === tool ? current : null);
   }, [tool]);
 
   const cards = previewCards ?? document.cards;
@@ -302,47 +335,55 @@ export function CanvasWorkspace({
     }, 340);
   };
 
-  const placeCard = <T extends CanvasCard>(card: Omit<T, "x" | "y">, origin = viewportCenterGrid()) => {
-    const position = firstFreePosition(documentRef.current.cards, origin, { w: card.w, h: card.h });
+  const placeCard = <T extends CanvasCard>(
+    card: Omit<T, "x" | "y">,
+    origin = viewportCenterGrid(),
+    placement?: CreationPlacement,
+  ) => {
+    const position = placement?.rect ?? firstFreePosition(documentRef.current.cards, origin, { w: card.w, h: card.h });
     const next = { ...card, ...position } as T;
-    commitCards([...documentRef.current.cards, next]);
+    const nextCards = placement
+      ? reflowCards([...documentRef.current.cards, next], next.id, placement.rect, placement.direction)
+      : [...documentRef.current.cards, next];
+    commitCards(nextCards);
     setSelectedId(next.id);
     onToolChange("select");
     return next;
   };
 
-  const addText = (origin?: { x: number; y: number }, html = "", width = 1) => {
+  const addText = (origin?: { x: number; y: number }, html = "", width = 1, placement?: CreationPlacement) => {
     const card: Omit<TextCard, "x" | "y"> = {
       id: createId("text"),
       type: "text",
-      w: width,
-      h: 1,
-      color: nextCardColor(),
+      w: placement?.rect.w ?? width,
+      h: placement?.rect.h ?? 1,
+      color: placement?.color ?? nextCardColor(),
       createdAt: new Date().toISOString(),
       html,
       blocks: blocksFromHtml(html),
     };
-    return placeCard<TextCard>(card, origin);
+    return placeCard<TextCard>(card, origin, placement);
   };
 
-  const addCode = (origin?: { x: number; y: number }, code = "", language = "auto") => {
+  const addCode = (origin?: { x: number; y: number }, code = "", language = "auto", placement?: CreationPlacement) => {
     const card: Omit<CodeCard, "x" | "y"> = {
       id: createId("code"),
       type: "code",
-      w: 1,
-      h: 1,
-      color: nextCardColor(),
+      w: placement?.rect.w ?? 1,
+      h: placement?.rect.h ?? 1,
+      color: placement?.color ?? nextCardColor(),
       createdAt: new Date().toISOString(),
       code,
       language,
     };
-    return placeCard<CodeCard>(card, origin);
+    return placeCard<CodeCard>(card, origin, placement);
   };
 
   const addSpreadsheet = (
     origin?: { x: number; y: number },
     values?: string[][],
-    dataSize = { rows: sheetRows, columns: sheetColumns },
+    dataSize = { rows: 4, columns: 3 },
+    placement?: CreationPlacement,
   ) => {
     const cells = values ?? Array.from(
       { length: dataSize.rows + 1 },
@@ -353,21 +394,20 @@ export function CanvasWorkspace({
     const card: Omit<SpreadsheetCardType, "x" | "y"> = {
       id: createId("sheet"),
       type: "spreadsheet",
-      w: 2,
-      h: 2,
-      color: nextCardColor(),
+      w: placement?.rect.w ?? 2,
+      h: placement?.rect.h ?? 2,
+      color: placement?.color ?? nextCardColor(),
       createdAt: new Date().toISOString(),
       rows: normalized.length,
       columns,
       cells: normalized,
     };
-    const placed = placeCard<SpreadsheetCardType>(card, origin);
+    const placed = placeCard<SpreadsheetCardType>(card, origin, placement);
     setFocusedSheetId(placed.id);
-    setSheetConfigOpen(false);
-    setSheetOrigin(undefined);
+    setPendingPlacement(null);
   };
 
-  const addLink = async (rawUrl: string, origin?: { x: number; y: number }) => {
+  const addLink = async (rawUrl: string, origin?: { x: number; y: number }, placement?: CreationPlacement) => {
     const url = normalizeUrl(rawUrl);
     if (!url) {
       setNotice("That doesn’t look like a web link.");
@@ -377,9 +417,9 @@ export function CanvasWorkspace({
     const card: Omit<LinkCard, "x" | "y"> = {
       id: createId("link"),
       type: "link",
-      w: 2,
-      h: 1,
-      color: nextCardColor(),
+      w: placement?.rect.w ?? 2,
+      h: placement?.rect.h ?? 1,
+      color: placement?.color ?? nextCardColor(),
       createdAt: new Date().toISOString(),
       url,
       preview: {
@@ -389,9 +429,10 @@ export function CanvasWorkspace({
         domain: parsed.hostname.replace(/^www\./, ""),
       },
     };
-    const placed = placeCard<LinkCard>(card, origin);
+    const placed = placeCard<LinkCard>(card, origin, placement);
     setLinkInputOpen(false);
     setLinkValue("");
+    setPendingPlacement(null);
     try {
       const preview = await fetchLinkPreview(url);
       const accentSource = preview.imageDataUrl ?? preview.faviconDataUrl;
@@ -415,22 +456,33 @@ export function CanvasWorkspace({
     }
   };
 
-  const addImageFiles = async (files: FileList | File[], origin?: { x: number; y: number }) => {
+  const addImageFiles = async (
+    files: FileList | File[],
+    origin?: { x: number; y: number },
+    placement?: CreationPlacement,
+  ) => {
     const supported = Array.from(files).filter((file) =>
       file.type.startsWith("image/") || /\.(jpe?g|png|webp|gif|svg|ico)$/i.test(file.name),
     );
-    let position = origin ?? viewportCenterGrid();
-    for (const file of supported) {
+    let position = origin ?? (placement ? { x: placement.rect.x, y: placement.rect.y } : viewportCenterGrid());
+    for (const [index, file] of supported.entries()) {
       try {
         const image = await readImage(file);
         const averageAccent = await averageImageAccent(image.dataUrl);
+        const filePlacement = placement ? {
+          ...placement,
+          rect: {
+            ...placement.rect,
+            x: placement.rect.x + index * placement.rect.w,
+          },
+        } : undefined;
         placeCard<ImageCard>({
           ...image,
           id: createId("image"),
           color: averageAccent ?? nextCardColor(),
           createdAt: new Date().toISOString(),
-        }, position);
-        position = { x: position.x + image.w, y: position.y };
+        }, position, filePlacement);
+        position = { x: position.x + (placement?.rect.w ?? image.w), y: position.y };
       } catch (error) {
         setNotice(error instanceof Error ? error.message : "Could not add that image.");
       }
@@ -578,6 +630,34 @@ export function CanvasWorkspace({
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
+  const gridPointFromClient = (clientX: number, clientY: number, bounds: DOMRect) => ({
+    x: Math.floor((clientX - bounds.left - bounds.width / 2 - viewport.x) / viewport.zoom / stride),
+    y: Math.floor((clientY - bounds.top - bounds.height / 2 - viewport.y) / viewport.zoom / stride),
+  });
+
+  const finishCreation = (preview: CreationPreview) => {
+    const origin = { x: preview.rect.x, y: preview.rect.y };
+    if (preview.tool === "text") {
+      addText(origin, "", preview.rect.w, preview);
+      return;
+    }
+    if (preview.tool === "code") {
+      addCode(origin, "", "auto", preview);
+      return;
+    }
+    if (preview.tool === "spreadsheet") {
+      addSpreadsheet(origin, undefined, undefined, preview);
+      return;
+    }
+    if (preview.tool === "link") {
+      setPendingPlacement({ ...preview, active: true });
+      setLinkInputOpen(true);
+      return;
+    }
+    setPendingPlacement({ ...preview, active: true });
+    imageInputRef.current?.click();
+  };
+
   const finishViewport = (nextViewport: typeof viewport) => {
     const next = { ...documentRef.current, viewport: nextViewport, updatedAt: new Date().toISOString() };
     documentRef.current = next;
@@ -690,6 +770,9 @@ export function CanvasWorkspace({
     );
   };
 
+  const draftPreview = pendingPlacement ?? creationPreview;
+  const pendingLinkPlacement = pendingPlacement?.tool === "link" ? pendingPlacement : null;
+
   return (
     <div
       ref={surfaceRef}
@@ -701,7 +784,35 @@ export function CanvasWorkspace({
         const bounds = surface.getBoundingClientRect();
         lastPointerRef.current = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
         const interaction = interactionRef.current;
-        if (!interaction) return;
+        if (!interaction) {
+          if (tool !== "select" && !pendingPlacement) {
+            const point = gridPointFromClient(event.clientX, event.clientY, bounds);
+            setCreationPreview((current) => {
+              if (current && !current.active && current.tool === tool && current.rect.x === point.x && current.rect.y === point.y) return current;
+              return {
+                tool,
+                rect: { ...point, w: 1, h: 1 },
+                direction: { x: 0, y: 0 },
+                color,
+                active: false,
+              };
+            });
+          }
+          return;
+        }
+        if (interaction.type === "create") {
+          const point = gridPointFromClient(event.clientX, event.clientY, bounds);
+          const direction = { x: point.x - interaction.start.x, y: point.y - interaction.start.y };
+          const rect = {
+            x: Math.min(interaction.start.x, point.x),
+            y: Math.min(interaction.start.y, point.y),
+            w: Math.abs(direction.x) + 1,
+            h: Math.abs(direction.y) + 1,
+          };
+          interaction.placement = { ...interaction.placement, rect, direction };
+          setCreationPreview({ tool: interaction.tool, ...interaction.placement, active: true });
+          return;
+        }
         if (interaction.button === 2 && Math.hypot(event.clientX - interaction.startX, event.clientY - interaction.startY) >= 5) {
           suppressContextMenuRef.current = true;
         }
@@ -766,9 +877,14 @@ export function CanvasWorkspace({
       onPointerUp={(event) => {
         const interaction = interactionRef.current;
         if (!interaction) return;
-        if (interaction.type === "pan") finishViewport(viewport);
+        if (interaction.type === "create") {
+          interactionRef.current = null;
+          setCreationPreview(null);
+          suppressCanvasClickRef.current = true;
+          finishCreation({ tool: interaction.tool, ...interaction.placement, active: true });
+        } else if (interaction.type === "pan") finishViewport(viewport);
         else if (interaction.type !== "box-select" && previewCards && JSON.stringify(previewCards) !== JSON.stringify(documentRef.current.cards)) commitCards(previewCards);
-        interactionRef.current = null;
+        if (interaction.type !== "create") interactionRef.current = null;
         setPreviewCards(null);
         setSelectionRect(null);
         if (interaction.button === 2) {
@@ -780,7 +896,11 @@ export function CanvasWorkspace({
       onPointerCancel={() => {
         interactionRef.current = null;
         setPreviewCards(null);
+        setCreationPreview(null);
         setSelectionRect(null);
+      }}
+      onPointerLeave={() => {
+        if (!interactionRef.current && !pendingPlacement) setCreationPreview(null);
       }}
       onPointerDown={(event) => {
         if (event.button === 1 || event.button === 2) {
@@ -795,8 +915,27 @@ export function CanvasWorkspace({
           event.currentTarget.setPointerCapture(event.pointerId);
           return;
         }
+        if (tool !== "select" && event.button === 0) {
+          const target = event.target as HTMLElement;
+          if (target.closest(".tool-dock, .canvas-zoom-controls, .link-entry-popover, .canvas-notice")) return;
+          if (pendingPlacement) return;
+          const bounds = event.currentTarget.getBoundingClientRect();
+          const start = gridPointFromClient(event.clientX, event.clientY, bounds);
+          const placement = {
+            rect: { ...start, w: 1, h: 1 },
+            direction: { x: 0, y: 0 },
+            color: nextCardColor(),
+          };
+          interactionRef.current = { type: "create", button: event.button, tool, start, placement };
+          setCreationPreview({ tool, ...placement, active: true });
+          setSelectedId(null);
+          setSelectedIds(new Set());
+          setMarqueeSelection(false);
+          setFocusedSheetId(null);
+          event.currentTarget.setPointerCapture(event.pointerId);
+          return;
+        }
         if (event.target !== event.currentTarget && !(event.target as HTMLElement).classList.contains("canvas-world")) return;
-        if (tool !== "select") return;
         if (event.button === 0) {
           interactionRef.current = { type: "box-select", button: event.button, startX: event.clientX, startY: event.clientY };
           setSelectedId(null);
@@ -824,19 +963,6 @@ export function CanvasWorkspace({
           setFocusedSheetId(null);
           return;
         }
-        const bounds = event.currentTarget.getBoundingClientRect();
-        const origin = {
-          x: Math.floor((event.clientX - bounds.left - bounds.width / 2 - viewport.x) / viewport.zoom / stride),
-          y: Math.floor((event.clientY - bounds.top - bounds.height / 2 - viewport.y) / viewport.zoom / stride),
-        };
-        if (tool === "text") addText(origin);
-        if (tool === "code") addCode(origin);
-        if (tool === "spreadsheet") {
-          setSheetOrigin(origin);
-          setSheetConfigOpen(true);
-        }
-        if (tool === "image") imageInputRef.current?.click();
-        if (tool === "link") setLinkInputOpen(true);
       }}
       onWheel={(event) => {
         event.preventDefault();
@@ -928,6 +1054,7 @@ export function CanvasWorkspace({
               key={card.id}
               onPointerDown={(event) => {
                 if (event.button !== 0) return;
+                if (tool !== "select") return;
                 const target = event.target as HTMLElement;
                 const interactive = target.closest("button, a, input, textarea, select, [contenteditable='true'], .resize-handle, .text-toolbar");
                 const readOnlySheetCell = card.type === "spreadsheet" && !sheetFocused && target.closest(".sheet-cell");
@@ -1026,6 +1153,43 @@ export function CanvasWorkspace({
             </article>
           );
         })}
+
+        {draftPreview && (
+          <div
+            className={`creation-card-preview creation-${draftPreview.tool}${draftPreview.active ? " is-active" : ""}`}
+            style={cardSize({ ...draftPreview.rect, color: draftPreview.color })}
+            aria-hidden="true"
+          >
+            <CreationToolIcon tool={draftPreview.tool} />
+            <span>{draftPreview.rect.w} × {draftPreview.rect.h}</span>
+          </div>
+        )}
+
+        {linkInputOpen && pendingLinkPlacement && (
+          <form
+            className="link-entry-popover is-card-anchored"
+            style={{
+              left: pendingLinkPlacement.rect.x * stride + GRID_GAP / 2,
+              top: (pendingLinkPlacement.rect.y + pendingLinkPlacement.rect.h) * stride + GRID_GAP / 2,
+              width: Math.max(
+                pendingLinkPlacement.rect.w * GRID_UNIT + (pendingLinkPlacement.rect.w - 1) * GRID_GAP,
+                420,
+              ),
+            }}
+            onSubmit={(event) => {
+              event.preventDefault();
+              void addLink(
+                linkValue,
+                { x: pendingLinkPlacement.rect.x, y: pendingLinkPlacement.rect.y },
+                pendingLinkPlacement,
+              );
+            }}
+          >
+            <LinkIcon size={18}/>
+            <input autoFocus value={linkValue} onChange={(event) => setLinkValue(event.currentTarget.value)} placeholder="Paste a web address…" />
+            <button type="submit">Add link</button>
+          </form>
+        )}
       </div>
 
       {document.cards.length === 0 && (
@@ -1047,9 +1211,9 @@ export function CanvasWorkspace({
         <span className="dock-divider"/>
         <button className={`dock-tool has-shortcut text-tool${tool === "text" ? " active" : ""}`} title="Text card (T)" onClick={() => onToolChange("text")}><TextIcon/><span className="dock-shortcut">T</span></button>
         <button className={`dock-tool has-shortcut code-tool${tool === "code" ? " active" : ""}`} title="Code card (C)" onClick={() => onToolChange("code")}><CodeIcon/><span className="dock-shortcut">C</span></button>
-        <button className={`dock-tool has-shortcut image-tool${tool === "image" ? " active" : ""}`} title="Image card (M)" onClick={() => { onToolChange("image"); imageInputRef.current?.click(); }}><ImageIcon/><span className="dock-shortcut">M</span></button>
-        <button className={`dock-tool has-shortcut sheet-tool${tool === "spreadsheet" ? " active" : ""}`} title="Spreadsheet card (S)" onClick={() => { onToolChange("spreadsheet"); setSheetConfigOpen(true); }}><SheetIcon/><span className="dock-shortcut">S</span></button>
-        <button className={`dock-tool has-shortcut link-tool${tool === "link" ? " active" : ""}`} title="Link card (L)" onClick={() => { onToolChange("link"); setLinkInputOpen(true); }}><LinkIcon/><span className="dock-shortcut">L</span></button>
+        <button className={`dock-tool has-shortcut image-tool${tool === "image" ? " active" : ""}`} title="Image card (M)" onClick={() => onToolChange("image")}><ImageIcon/><span className="dock-shortcut">M</span></button>
+        <button className={`dock-tool has-shortcut sheet-tool${tool === "spreadsheet" ? " active" : ""}`} title="Spreadsheet card (S)" onClick={() => onToolChange("spreadsheet")}><SheetIcon/><span className="dock-shortcut">S</span></button>
+        <button className={`dock-tool has-shortcut link-tool${tool === "link" ? " active" : ""}`} title="Link card (L)" onClick={() => onToolChange("link")}><LinkIcon/><span className="dock-shortcut">L</span></button>
         <span className="dock-divider"/>
         <div className="dock-colors">
           {CARD_COLORS.map((cardColor) => (
@@ -1076,23 +1240,6 @@ export function CanvasWorkspace({
         ><DiceIcon size={18}/></button>
       </div>
 
-      {linkInputOpen && (
-        <form className="link-entry-popover" onSubmit={(event) => { event.preventDefault(); void addLink(linkValue); }}>
-          <LinkIcon size={18}/>
-          <input autoFocus value={linkValue} onChange={(event) => setLinkValue(event.currentTarget.value)} placeholder="Paste a web address…" />
-          <button type="submit">Add link</button>
-        </form>
-      )}
-
-      {sheetConfigOpen && (
-        <form className="sheet-create-popover" onSubmit={(event) => { event.preventDefault(); addSpreadsheet(sheetOrigin); }}>
-          <SheetIcon size={18}/>
-          <label>Rows<input type="number" min="1" max="50" value={sheetRows} onChange={(event) => setSheetRows(Math.max(1, Math.min(50, Number(event.currentTarget.value) || 1)))}/></label>
-          <label>Columns<input type="number" min="1" max="26" value={sheetColumns} onChange={(event) => setSheetColumns(Math.max(1, Math.min(26, Number(event.currentTarget.value) || 1)))}/></label>
-          <button type="submit">Create sheet</button>
-        </form>
-      )}
-
       {notice && <button className="canvas-notice" onClick={() => setNotice(null)}>{notice}</button>}
       <input
         ref={imageInputRef}
@@ -1101,8 +1248,19 @@ export function CanvasWorkspace({
         multiple
         accept=".jpg,.jpeg,.png,.webp,.gif,.svg,.ico,image/jpeg,image/png,image/webp,image/gif,image/svg+xml,image/x-icon"
         onChange={(event) => {
-          if (event.currentTarget.files) void addImageFiles(event.currentTarget.files);
+          const files = Array.from(event.currentTarget.files ?? []);
+          const placement = pendingPlacement?.tool === "image" ? pendingPlacement : undefined;
           event.currentTarget.value = "";
+          if (files.length) {
+            void addImageFiles(files, placement ? { x: placement.rect.x, y: placement.rect.y } : undefined, placement)
+              .finally(() => {
+                setPendingPlacement(null);
+                onToolChange("select");
+              });
+          } else {
+            setPendingPlacement(null);
+            onToolChange("select");
+          }
         }}
       />
     </div>

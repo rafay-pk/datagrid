@@ -200,10 +200,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, [contenteditabl
 .canvas-surface { position: absolute; inset: 0; overflow: hidden; touch-action: none; background-color: var(--canvas); background-image: linear-gradient(to right, var(--grid-line) 1px, transparent 1px), linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px); background-size: var(--grid-step) var(--grid-step); background-position: var(--grid-x) var(--grid-y); cursor: grab; }
 .canvas-surface.is-panning { cursor: grabbing; }
 .canvas-surface.tool-text, .canvas-surface.tool-code, .canvas-surface.tool-image, .canvas-surface.tool-spreadsheet, .canvas-surface.tool-link { cursor: crosshair; }
+.canvas-surface:not(.tool-select) .grid-card { pointer-events: none; }
 .canvas-world { position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform-origin: 0 0; will-change: transform; }
 .canvas-selection-box { position: absolute; z-index: 45; border: 1px solid color-mix(in srgb, var(--primary) 78%, white); border-radius: .3rem; background: color-mix(in srgb, var(--primary) 14%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 18%, transparent); pointer-events: none; }
 .canvas-world.is-focusing { transition: transform .34s cubic-bezier(.2,.8,.2,1); }
 .canvas-world.is-text-editing { will-change: auto; }
+.creation-card-preview { position: absolute; z-index: 42; display: grid; place-content: center; justify-items: center; gap: .55rem; overflow: hidden; border: 2px dashed #7d858e; border-bottom: 5px solid #7d858e; border-radius: 1rem; color: #666f78; background: color-mix(in srgb, var(--surface-raised) 78%, #aab0b6); box-shadow: 0 8px 22px rgba(30,36,50,.12); filter: grayscale(1); opacity: .52; pointer-events: none; transition: left .08s linear, top .08s linear, width .08s linear, height .08s linear, color .12s ease, background .12s ease, border-color .12s ease, opacity .12s ease, filter .12s ease; }
+.creation-card-preview.is-active { border-color: color-mix(in srgb, var(--card-accent) 68%, var(--border-strong)); border-bottom-color: var(--card-accent); color: var(--card-accent); background: color-mix(in srgb, var(--card-accent) 10%, var(--surface-raised)); box-shadow: 0 14px 34px rgba(30,36,50,.16), inset 0 0 0 1px color-mix(in srgb, var(--card-accent) 24%, transparent); filter: none; opacity: .9; }
+.creation-card-preview span { padding: .18rem .48rem; border-radius: 999px; color: inherit; background: color-mix(in srgb, var(--surface-raised) 82%, transparent); font-size: .66rem; font-weight: 780; }
 
 .grid-card { position: absolute; overflow: visible; border: 1px solid var(--border); border-bottom: 5px solid var(--card-accent); border-radius: 1rem; color: var(--text); background: var(--surface-raised); box-shadow: var(--shadow-card); transition: left .17s cubic-bezier(.2,.8,.2,1), top .17s cubic-bezier(.2,.8,.2,1), width .16s ease, height .16s ease, opacity .16s ease, box-shadow .16s ease; }
 .grid-card::after { content: ""; position: absolute; z-index: -1; left: 0.7rem; right: 0.7rem; bottom: -0.48rem; height: 0.55rem; border-radius: 50%; background: color-mix(in srgb, var(--card-accent) 25%, transparent); filter: blur(8px); opacity: .75; }
@@ -354,14 +358,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, [contenteditabl
 .canvas-zoom-controls button:hover { color: var(--text); background: var(--surface-hover); }
 .canvas-zoom-controls .zoom-value { min-width: 3rem; font-size: .68rem; font-weight: 700; }
 .link-entry-popover { position: absolute; z-index: 90; left: 50%; bottom: 5.35rem; display: flex; align-items: center; gap: .6rem; width: min(31rem, calc(100% - 2rem)); padding: .55rem; border: 1px solid var(--border-strong); border-radius: .9rem; background: var(--surface); box-shadow: var(--shadow-float); transform: translateX(-50%); }
+.link-entry-popover.is-card-anchored { right: auto; bottom: auto; max-width: none; transform: none; }
 .link-entry-popover > svg { margin-left: .4rem; color: #e04b73; }
 .link-entry-popover input { flex: 1; min-width: 0; height: 2.4rem; border: 0; outline: 0; background: transparent; font-size: .82rem; }
 .link-entry-popover button { height: 2.35rem; padding: 0 .9rem; border-radius: .65rem; color: white; background: var(--primary); font-size: .75rem; font-weight: 700; cursor: pointer; }
-.sheet-create-popover { position: absolute; z-index: 90; left: 50%; bottom: 5.35rem; display: flex; align-items: end; gap: .65rem; width: min(30rem, calc(100% - 2rem)); padding: .65rem; border: 1px solid var(--border-strong); border-radius: .9rem; background: var(--surface); box-shadow: var(--shadow-float); transform: translateX(-50%); }
-.sheet-create-popover > svg { align-self: center; margin: 0 .2rem; color: #e69a00; }
-.sheet-create-popover label { display: flex; flex: 1; flex-direction: column; gap: .2rem; color: var(--text-muted); font-size: .62rem; font-weight: 750; }
-.sheet-create-popover input { width: 100%; height: 2.2rem; padding: 0 .6rem; border: 1px solid var(--border); border-radius: .55rem; outline: 0; background: var(--surface-muted); }
-.sheet-create-popover button { height: 2.2rem; padding: 0 .85rem; border: 1px solid #b87600; border-radius: .58rem; color: #2b220e; background: #fbbc04; box-shadow: inset 0 1px 0 rgba(255,255,255,.45), inset 0 -2px 0 rgba(132,84,0,.15); font-size: .7rem; font-weight: 780; cursor: pointer; }
 .canvas-notice { position: absolute; z-index: 90; top: 4rem; left: 50%; padding: .7rem 1rem; border: 1px solid var(--border); border-radius: .75rem; background: var(--surface); box-shadow: var(--shadow-float); transform: translateX(-50%); cursor: pointer; }
 .empty-canvas-hint { position: absolute; top: 50%; left: 50%; display: flex; flex-direction: column; align-items: center; gap: .42rem; color: var(--text-muted); transform: translate(-50%,-50%); text-align: center; pointer-events: none; }
 .empty-canvas-hint strong { color: var(--text); font-size: 1.05rem; }
