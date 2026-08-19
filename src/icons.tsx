@@ -29,6 +29,7 @@ export const SunIcon = (props: IconProps) => <IconBase {...props}><circle cx="12
 export const MoonIcon = (props: IconProps) => <IconBase {...props}><path d="M20 15.2A8.3 8.3 0 0 1 8.8 4 8.4 8.4 0 1 0 20 15.2Z"/></IconBase>;
 export const PointerIcon = (props: IconProps) => <IconBase {...props}><path d="m5 3 13 9-6 1-3 6z"/></IconBase>;
 export const TextIcon = (props: IconProps) => <IconBase {...props}><path d="M5 5h14M12 5v14M8 19h8"/></IconBase>;
+export const CodeIcon = (props: IconProps) => <IconBase {...props}><path d="m9 7-5 5 5 5M15 7l5 5-5 5"/></IconBase>;
 export const ImageIcon = (props: IconProps) => <IconBase {...props}><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m4 17 5-5 4 4 3-3 4 4"/></IconBase>;
 export const SheetIcon = (props: IconProps) => <IconBase {...props}><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></IconBase>;
 export const LinkIcon = (props: IconProps) => <IconBase {...props}><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.1 1.1M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.1-1.1"/></IconBase>;

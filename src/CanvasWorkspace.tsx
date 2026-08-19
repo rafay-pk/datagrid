@@ -5,6 +5,7 @@ import { averageImageAccent } from "./color";
 import { clampZoom, firstFreePosition, overlaps, reflowCardGroup, reflowCards } from "./grid";
 import {
   CheckIcon,
+  CodeIcon,
   CopyIcon,
   DiceIcon,
   DuplicateIcon,
@@ -21,6 +22,7 @@ import {
 import { SpreadsheetCard, spreadsheetToCsv } from "./SpreadsheetCard";
 import { ImageCardLabel } from "./ImageCardLabel";
 import { TextEditor } from "./TextEditor";
+import { CodeEditor } from "./CodeEditor";
 import { blocksFromHtml, looksTabular, normalizeUrl, parseTable, plainTextFromBlocks } from "./textFormat";
 import {
   CARD_COLORS,
@@ -29,6 +31,7 @@ import {
   createId,
   type CanvasCard,
   type CanvasDocument,
+  type CodeCard,
   type GridRect,
   type ImageCard,
   type LinkCard,
@@ -144,9 +147,20 @@ function cardMatchesSearch(card: CanvasCard, query: string): boolean {
   if (!query.trim()) return true;
   const needle = query.toLowerCase();
   if (card.type === "text") return plainTextFromBlocks(card.blocks).toLowerCase().includes(needle);
+  if (card.type === "code") return `${card.language} ${card.code}`.toLowerCase().includes(needle);
   if (card.type === "spreadsheet") return card.cells.flat().join(" ").toLowerCase().includes(needle);
   if (card.type === "image") return `${card.label ?? ""} ${card.fileName}`.toLowerCase().includes(needle);
   return `${card.url} ${card.preview.title} ${card.preview.description}`.toLowerCase().includes(needle);
+}
+
+function htmlFromPlainText(value: string): string {
+  if (!value) return "";
+  const escaped = value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\n/g, "<br>");
+  return `<div>${escaped}</div>`;
 }
 
 export function CanvasWorkspace({
@@ -184,7 +198,7 @@ export function CanvasWorkspace({
   const [isFocusing, setIsFocusing] = useState(false);
   const [copiedCardId, setCopiedCardId] = useState<string | null>(null);
   const lastRandomColorRef = useRef<string | null>(null);
-  const textMinimumsRef = useRef(new Map<string, { w: number; h: number }>());
+  const contentMinimumsRef = useRef(new Map<string, { w: number; h: number }>());
   const focusTimeoutRef = useRef<number | null>(null);
   const copiedTimeoutRef = useRef<number | null>(null);
   const suppressContextMenuRef = useRef(false);
@@ -291,6 +305,20 @@ export function CanvasWorkspace({
       blocks: blocksFromHtml(html),
     };
     placeCard<TextCard>(card, origin);
+  };
+
+  const addCode = (origin?: { x: number; y: number }, code = "") => {
+    const card: Omit<CodeCard, "x" | "y"> = {
+      id: createId("code"),
+      type: "code",
+      w: 1,
+      h: 1,
+      color: nextCardColor(),
+      createdAt: new Date().toISOString(),
+      code,
+      language: "auto",
+    };
+    placeCard<CodeCard>(card, origin);
   };
 
   const addSpreadsheet = (
@@ -403,12 +431,51 @@ export function CanvasWorkspace({
     setSelectedId((selected) => (selected === id ? null : selected));
     setFocusedSheetId((focused) => (focused === id ? null : focused));
     setEditingImageLabelId((editing) => (editing === id ? null : editing));
+    setEditingTextId((editing) => (editing === id ? null : editing));
+  };
+
+  const convertTextToCode = (card: TextCard) => {
+    const code = plainTextFromBlocks(card.blocks.length ? card.blocks : blocksFromHtml(card.html));
+    const next: CodeCard = {
+      id: card.id,
+      type: "code",
+      x: card.x,
+      y: card.y,
+      w: card.w,
+      h: card.h,
+      color: card.color,
+      createdAt: card.createdAt,
+      code,
+      language: "auto",
+    };
+    updateCard(card.id, () => next);
+    setEditingTextId(null);
+  };
+
+  const convertCodeToText = (card: CodeCard) => {
+    const html = htmlFromPlainText(card.code);
+    const next: TextCard = {
+      id: card.id,
+      type: "text",
+      x: card.x,
+      y: card.y,
+      w: card.w,
+      h: card.h,
+      color: card.color,
+      createdAt: card.createdAt,
+      html,
+      blocks: blocksFromHtml(html),
+    };
+    updateCard(card.id, () => next);
+    setEditingTextId(null);
   };
 
   const copyCardToClipboard = async (card: CanvasCard) => {
     try {
       if (card.type === "text") {
         await navigator.clipboard.writeText(plainTextFromBlocks(card.blocks));
+      } else if (card.type === "code") {
+        await navigator.clipboard.writeText(card.code);
       } else if (card.type === "link") {
         await navigator.clipboard.writeText(card.url);
       } else if (card.type === "spreadsheet") {
@@ -475,6 +542,7 @@ export function CanvasWorkspace({
       const shortcutTools: Partial<Record<string, Tool>> = {
         h: "select",
         t: "text",
+        c: "code",
         m: "image",
         s: "spreadsheet",
         l: "link",
@@ -520,7 +588,7 @@ export function CanvasWorkspace({
     const contentHeightRows = Math.ceil((metrics.scrollHeight + GRID_GAP + 32) / stride);
     const contentRows = Math.ceil(metrics.lineCount / 8);
     const targetHeight = Math.max(contentHeightRows, contentRows, card.h);
-    textMinimumsRef.current.set(card.id, {
+    contentMinimumsRef.current.set(card.id, {
       w: metrics.maxLineLength > 34 ? 2 : 1,
       h: Math.max(contentHeightRows, contentRows, 1),
     });
@@ -532,6 +600,30 @@ export function CanvasWorkspace({
       : { ...card, h: targetHeight };
     commitCards(
       reflowCards(documentRef.current.cards, card.id, target, shouldWiden ? { x: 1, y: 0 } : { x: 0, y: 1 }),
+      false,
+    );
+  };
+
+  const handleCodeMeasure = (
+    cardId: string,
+    metrics: { contentWidth: number; contentHeight: number },
+  ) => {
+    const card = documentRef.current.cards.find((item) => item.id === cardId);
+    if (!card || card.type !== "code") return;
+
+    const minimumWidth = Math.max(1, Math.ceil((metrics.contentWidth + GRID_GAP) / stride));
+    const minimumHeight = Math.max(1, Math.ceil((metrics.contentHeight + GRID_GAP + 42) / stride));
+    contentMinimumsRef.current.set(card.id, {
+      w: minimumWidth,
+      h: minimumHeight,
+    });
+    const targetWidth = Math.max(card.w, minimumWidth);
+    const targetHeight = Math.max(card.h, minimumHeight);
+    if (targetWidth === card.w && targetHeight === card.h) return;
+
+    const target = { ...card, w: targetWidth, h: targetHeight };
+    commitCards(
+      reflowCards(documentRef.current.cards, card.id, target, { x: targetWidth - card.w, y: targetHeight - card.h }),
       false,
     );
   };
@@ -598,11 +690,13 @@ export function CanvasWorkspace({
           target = { ...interaction.origin, x: interaction.origin.x + dx, y: interaction.origin.y + dy };
         } else {
           const source = documentRef.current.cards.find((card) => card.id === interaction.cardId);
-          const textMinimum = source?.type === "text" ? textMinimumsRef.current.get(source.id) : undefined;
+          const contentMinimum = source && (source.type === "text" || source.type === "code")
+            ? contentMinimumsRef.current.get(source.id)
+            : undefined;
           target = {
             ...interaction.origin,
-            w: Math.max(textMinimum?.w ?? 1, interaction.origin.w + dx),
-            h: Math.max(textMinimum?.h ?? 1, interaction.origin.h + dy),
+            w: Math.max(contentMinimum?.w ?? 1, interaction.origin.w + dx),
+            h: Math.max(contentMinimum?.h ?? 1, interaction.origin.h + dy),
           };
         }
         setPreviewCards(reflowCards(documentRef.current.cards, interaction.cardId, target, { x: dx, y: dy }));
@@ -674,6 +768,7 @@ export function CanvasWorkspace({
           y: Math.floor((event.clientY - bounds.top - bounds.height / 2 - viewport.y) / viewport.zoom / stride),
         };
         if (tool === "text") addText(origin);
+        if (tool === "code") addCode(origin);
         if (tool === "spreadsheet") {
           setSheetOrigin(origin);
           setSheetConfigOpen(true);
@@ -795,8 +890,21 @@ export function CanvasWorkspace({
                   html={card.html}
                   onFocus={() => setSelectedId(card.id)}
                   onActiveChange={(active) => setEditingTextId(active ? card.id : null)}
+                  onConvertToCode={() => convertTextToCode(card)}
                   onChange={(html, blocks) => updateCard(card.id, (current) => current.type === "text" ? { ...current, html, blocks } : current)}
                   onMeasure={(metrics) => handleTextMeasure(card.id, metrics)}
+                />
+              )}
+              {card.type === "code" && (
+                <CodeEditor
+                  code={card.code}
+                  language={card.language}
+                  onFocus={() => setSelectedId(card.id)}
+                  onActiveChange={(active) => setEditingTextId(active ? card.id : null)}
+                  onChange={(code) => updateCard(card.id, (current) => current.type === "code" ? { ...current, code } : current)}
+                  onLanguageChange={(language) => updateCard(card.id, (current) => current.type === "code" ? { ...current, language } : current)}
+                  onConvertToText={() => convertCodeToText(card)}
+                  onMeasure={(metrics) => handleCodeMeasure(card.id, metrics)}
                 />
               )}
               {card.type === "image" && (
@@ -861,6 +969,7 @@ export function CanvasWorkspace({
         <button className={`dock-tool has-shortcut${tool === "select" ? " active" : ""}`} title="Select and pan (H)" onClick={() => onToolChange("select")}><PointerIcon/><span className="dock-shortcut">H</span></button>
         <span className="dock-divider"/>
         <button className={`dock-tool has-shortcut text-tool${tool === "text" ? " active" : ""}`} title="Text card (T)" onClick={() => onToolChange("text")}><TextIcon/><span className="dock-shortcut">T</span></button>
+        <button className={`dock-tool has-shortcut code-tool${tool === "code" ? " active" : ""}`} title="Code card (C)" onClick={() => onToolChange("code")}><CodeIcon/><span className="dock-shortcut">C</span></button>
         <button className={`dock-tool has-shortcut image-tool${tool === "image" ? " active" : ""}`} title="Image card (M)" onClick={() => { onToolChange("image"); imageInputRef.current?.click(); }}><ImageIcon/><span className="dock-shortcut">M</span></button>
         <button className={`dock-tool has-shortcut sheet-tool${tool === "spreadsheet" ? " active" : ""}`} title="Spreadsheet card (S)" onClick={() => { onToolChange("spreadsheet"); setSheetConfigOpen(true); }}><SheetIcon/><span className="dock-shortcut">S</span></button>
         <button className={`dock-tool has-shortcut link-tool${tool === "link" ? " active" : ""}`} title="Link card (L)" onClick={() => { onToolChange("link"); setLinkInputOpen(true); }}><LinkIcon/><span className="dock-shortcut">L</span></button>

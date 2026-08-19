@@ -195,6 +195,29 @@ fn render_text_card(card: &Value) -> String {
     output
 }
 
+fn render_code_card(card: &Value) -> String {
+    let code = card.get("code").and_then(Value::as_str).unwrap_or("");
+    let language = card.get("language").and_then(Value::as_str).unwrap_or("auto");
+    let mut output = format!(
+        "<text:p text:style-name=\"CodeLabel\">{}</text:p>",
+        escape_xml(language)
+    );
+    for line in code.split('\n') {
+        let mut rendered = String::new();
+        for character in line.trim_end_matches('\r').chars() {
+            match character {
+                ' ' => rendered.push_str("<text:s/>"),
+                '\t' => rendered.push_str("<text:s text:c=\"2\"/>"),
+                _ => rendered.push_str(&escape_xml(&character.to_string())),
+            }
+        }
+        output.push_str(&format!(
+            "<text:p text:style-name=\"Code\">{rendered}</text:p>"
+        ));
+    }
+    output
+}
+
 fn data_url_parts(data_url: &str) -> Option<(&str, Vec<u8>)> {
     let (header, payload) = data_url.split_once(',')?;
     let mime = header.strip_prefix("data:")?.split(';').next()?;
@@ -244,8 +267,8 @@ fn spreadsheet_content(card: &Value) -> String {
 }
 
 fn basic_styles(font: &str) -> String {
-    format!(r#"<?xml version="1.0" encoding="UTF-8"?>
-<office:document-styles xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" office:version="1.3"><office:font-face-decls><style:font-face style:name="DatagridFont" svg:font-family="{}"/></office:font-face-decls><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="DatagridFont"/></style:default-style><style:style style:name="ImageLabel" style:family="paragraph"><style:paragraph-properties fo:text-align="center"/></style:style><style:style style:name="Bold" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style><style:style style:name="Italic" style:family="text"><style:text-properties fo:font-style="italic"/></style:style><style:style style:name="BoldItalic" style:family="text"><style:text-properties fo:font-weight="bold" fo:font-style="italic"/></style:style><style:style style:name="Underline" style:family="text"><style:text-properties style:text-underline-style="solid" style:text-underline-width="auto" style:text-underline-color="font-color"/></style:style><text:list-style style:name="BulletList"><text:list-level-style-bullet text:level="1" text:bullet-char="•"/></text:list-style><text:list-style style:name="NumberList"><text:list-level-style-number text:level="1" style:num-format="1"/></text:list-style></office:styles></office:document-styles>"#, escape_xml(font))
+    format!(r##"<?xml version="1.0" encoding="UTF-8"?>
+<office:document-styles xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" office:version="1.3"><office:font-face-decls><style:font-face style:name="DatagridFont" svg:font-family="{}"/><style:font-face style:name="DatagridMono" svg:font-family="Liberation Mono"/></office:font-face-decls><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="DatagridFont"/></style:default-style><style:style style:name="ImageLabel" style:family="paragraph"><style:paragraph-properties fo:text-align="center"/></style:style><style:style style:name="CodeLabel" style:family="paragraph"><style:paragraph-properties fo:background-color="#ece6dc" fo:padding="0.12cm"/><style:text-properties style:font-name="DatagridMono" fo:font-size="8pt" fo:font-weight="bold" fo:color="#666666"/></style:style><style:style style:name="Code" style:family="paragraph"><style:paragraph-properties fo:background-color="#f7f3ec" fo:padding-left="0.18cm" fo:padding-right="0.18cm"/><style:text-properties style:font-name="DatagridMono" fo:font-size="9pt"/></style:style><style:style style:name="Bold" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style><style:style style:name="Italic" style:family="text"><style:text-properties fo:font-style="italic"/></style:style><style:style style:name="BoldItalic" style:family="text"><style:text-properties fo:font-weight="bold" fo:font-style="italic"/></style:style><style:style style:name="Underline" style:family="text"><style:text-properties style:text-underline-style="solid" style:text-underline-width="auto" style:text-underline-color="font-color"/></style:style><text:list-style style:name="BulletList"><text:list-level-style-bullet text:level="1" text:bullet-char="•"/></text:list-style><text:list-style style:name="NumberList"><text:list-level-style-number text:level="1" style:num-format="1"/></text:list-style></office:styles></office:document-styles>"##, escape_xml(font))
 }
 
 fn build_odt(document: &Value) -> Result<Vec<u8>, String> {
@@ -268,6 +291,7 @@ fn build_odt(document: &Value) -> Result<Vec<u8>, String> {
         let id = sanitize_file_name(card.get("id").and_then(Value::as_str).unwrap_or("card"));
         match card_type {
             "text" => body.push_str(&render_text_card(card)),
+            "code" => body.push_str(&render_code_card(card)),
             "image" => {
                 if let Some((mime, bytes)) = card.get("dataUrl").and_then(Value::as_str).and_then(data_url_parts) {
                     let path = format!("Pictures/{id}.{}", extension_for_mime(mime));
@@ -630,6 +654,11 @@ mod tests {
                     "id": "link-one", "type": "link", "x": 2, "y": 0, "w": 2, "h": 1,
                     "color": "#3485f7", "createdAt": "0", "url": "https://example.com",
                     "preview": { "title": "Example", "description": "Portable link", "siteName": "Example", "domain": "example.com" }
+                },
+                {
+                    "id": "code-one", "type": "code", "x": 2, "y": 1, "w": 2, "h": 1,
+                    "color": "#836ca7", "createdAt": "0", "language": "rust",
+                    "code": "fn main() {\n    println!(\"Hello\");\n}"
                 }
             ]
         });
@@ -637,7 +666,7 @@ mod tests {
         save_document(&path, &document).unwrap();
         let reopened = read_document(&path).unwrap();
         assert_eq!(reopened["name"], "Portable canvas");
-        assert_eq!(reopened["cards"].as_array().unwrap().len(), 4);
+        assert_eq!(reopened["cards"].as_array().unwrap().len(), 5);
         assert_eq!(reopened["cards"][1]["label"], "Tiny pixel");
 
         let file = File::open(&path).unwrap();
@@ -655,6 +684,7 @@ mod tests {
             .read_to_string(&mut content_xml)
             .unwrap();
         assert!(content_xml.contains("Tiny pixel"));
+        assert!(content_xml.contains("println!"));
 
         drop(archive);
         fs::remove_dir_all(test_root).unwrap();
