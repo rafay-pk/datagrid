@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { fetchLinkPreview } from "./api";
+import { fetchImageDataUrl, fetchLinkPreview } from "./api";
 import { averageImageAccent } from "./color";
-import { clampZoom, firstFreePosition, overlaps, reflowCardGroup, reflowCards } from "./grid";
+import { clampZoom, firstFreePosition, reflowCardGroup, reflowCards } from "./grid";
 import {
   CheckIcon,
   CodeIcon,
@@ -23,7 +23,9 @@ import { SpreadsheetCard, spreadsheetToCsv } from "./SpreadsheetCard";
 import { ImageCardLabel } from "./ImageCardLabel";
 import { TextEditor } from "./TextEditor";
 import { CodeEditor } from "./CodeEditor";
-import { blocksFromHtml, looksTabular, normalizeUrl, parseTable, plainTextFromBlocks } from "./textFormat";
+import { convertClipboardContent } from "./clipboardFormat";
+import type { ClipboardImage } from "./clipboardFormat";
+import { blocksFromHtml, looksTabular, normalizeUrl, parseTable, plainTextFromBlocks, trimTrailingEmptyLines } from "./textFormat";
 import {
   CARD_COLORS,
   GRID_GAP,
@@ -98,29 +100,40 @@ function cardSize(card: CanvasCard): React.CSSProperties {
   } as React.CSSProperties;
 }
 
-function readImage(file: File): Promise<Omit<ImageCard, "id" | "x" | "y" | "color" | "createdAt">> {
+type NewImageCard = Omit<ImageCard, "id" | "x" | "y" | "color" | "createdAt">;
+
+function imageCardFromDataUrl(dataUrl: string, fileName: string, mimeType: string): Promise<NewImageCard> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onerror = () => reject(new Error(`${fileName} is not a supported image.`));
+    image.onload = () => {
+      const ratio = image.naturalWidth / Math.max(1, image.naturalHeight);
+      const size = ratio > 1.18 ? { w: 2, h: 1 } : ratio < 0.85 ? { w: 1, h: 2 } : { w: 1, h: 1 };
+      resolve({
+        type: "image",
+        dataUrl,
+        mimeType,
+        fileName,
+        label: "",
+        naturalWidth: image.naturalWidth,
+        naturalHeight: image.naturalHeight,
+        ...size,
+      });
+    };
+    image.src = dataUrl;
+  });
+}
+
+function readImage(file: File): Promise<NewImageCard> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
     reader.onload = () => {
-      const dataUrl = String(reader.result);
-      const image = new Image();
-      image.onerror = () => reject(new Error(`${file.name} is not a supported image.`));
-      image.onload = () => {
-        const ratio = image.naturalWidth / Math.max(1, image.naturalHeight);
-        const size = ratio > 1.18 ? { w: 2, h: 1 } : ratio < 0.85 ? { w: 1, h: 2 } : { w: 1, h: 1 };
-        resolve({
-          type: "image",
-          dataUrl,
-          mimeType: file.type || (file.name.toLowerCase().endsWith(".ico") ? "image/x-icon" : "application/octet-stream"),
-          fileName: file.name,
-          label: "",
-          naturalWidth: image.naturalWidth,
-          naturalHeight: image.naturalHeight,
-          ...size,
-        });
-      };
-      image.src = dataUrl;
+      void imageCardFromDataUrl(
+        String(reader.result),
+        file.name,
+        file.type || (file.name.toLowerCase().endsWith(".ico") ? "image/x-icon" : "application/octet-stream"),
+      ).then(resolve, reject);
     };
     reader.readAsDataURL(file);
   });
@@ -161,6 +174,11 @@ function htmlFromPlainText(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/\n/g, "<br>");
   return `<div>${escaped}</div>`;
+}
+
+function pastedTextWidth(value: string): number {
+  const longestLine = Math.max(0, ...trimTrailingEmptyLines(value).split(/\r?\n/).map((line) => line.length));
+  return longestLine > 34 ? 4 : 1;
 }
 
 export function CanvasWorkspace({
@@ -293,21 +311,21 @@ export function CanvasWorkspace({
     return next;
   };
 
-  const addText = (origin?: { x: number; y: number }, html = "") => {
+  const addText = (origin?: { x: number; y: number }, html = "", width = 1) => {
     const card: Omit<TextCard, "x" | "y"> = {
       id: createId("text"),
       type: "text",
-      w: 1,
+      w: width,
       h: 1,
       color: nextCardColor(),
       createdAt: new Date().toISOString(),
       html,
       blocks: blocksFromHtml(html),
     };
-    placeCard<TextCard>(card, origin);
+    return placeCard<TextCard>(card, origin);
   };
 
-  const addCode = (origin?: { x: number; y: number }, code = "") => {
+  const addCode = (origin?: { x: number; y: number }, code = "", language = "auto") => {
     const card: Omit<CodeCard, "x" | "y"> = {
       id: createId("code"),
       type: "code",
@@ -316,9 +334,9 @@ export function CanvasWorkspace({
       color: nextCardColor(),
       createdAt: new Date().toISOString(),
       code,
-      language: "auto",
+      language,
     };
-    placeCard<CodeCard>(card, origin);
+    return placeCard<CodeCard>(card, origin);
   };
 
   const addSpreadsheet = (
@@ -391,6 +409,12 @@ export function CanvasWorkspace({
     }
   };
 
+  const addLinksBesideCard = (card: CanvasCard, links: string[]) => {
+    for (const [index, link] of Array.from(new Set(links)).entries()) {
+      void addLink(link, { x: card.x + card.w, y: card.y + index });
+    }
+  };
+
   const addImageFiles = async (files: FileList | File[], origin?: { x: number; y: number }) => {
     const supported = Array.from(files).filter((file) =>
       file.type.startsWith("image/") || /\.(jpe?g|png|webp|gif|svg|ico)$/i.test(file.name),
@@ -413,6 +437,34 @@ export function CanvasWorkspace({
     }
   };
 
+  const addPastedImagesAbove = async (card: CanvasCard, files: File[], sources: ClipboardImage[]) => {
+    const fileImages = files.map((file) => () => readImage(file));
+    const sourceImages = files.length ? [] : Array.from(new Map(sources.map((image) => [image.src, image])).values()).map(
+      (source, index) => async () => {
+        const dataUrl = await fetchImageDataUrl(source.src);
+        const mimeType = dataUrl.match(/^data:([^;,]+)/)?.[1] ?? "image/png";
+        const extension = mimeType.split("/")[1]?.replace("jpeg", "jpg") ?? "png";
+        return imageCardFromDataUrl(dataUrl, source.alt || `Pasted image ${index + 1}.${extension}`, mimeType);
+      },
+    );
+    let x = card.x;
+    for (const loadImage of [...fileImages, ...sourceImages]) {
+      try {
+        const image = await loadImage();
+        const averageAccent = await averageImageAccent(image.dataUrl);
+        placeCard<ImageCard>({
+          ...image,
+          id: createId("image"),
+          color: averageAccent ?? nextCardColor(),
+          createdAt: new Date().toISOString(),
+        }, { x, y: card.y - image.h });
+        x += image.w;
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Could not add a pasted image.");
+      }
+    }
+  };
+
   const duplicateCard = (card: CanvasCard) => {
     const next = {
       ...structuredClone(card),
@@ -426,16 +478,21 @@ export function CanvasWorkspace({
     setSelectedId(next.id);
   };
 
-  const deleteCard = (id: string) => {
-    commitCards(documentRef.current.cards.filter((card) => card.id !== id));
-    setSelectedId((selected) => (selected === id ? null : selected));
-    setFocusedSheetId((focused) => (focused === id ? null : focused));
-    setEditingImageLabelId((editing) => (editing === id ? null : editing));
-    setEditingTextId((editing) => (editing === id ? null : editing));
+  const deleteCards = (ids: ReadonlySet<string>) => {
+    if (!ids.size) return;
+    commitCards(documentRef.current.cards.filter((card) => !ids.has(card.id)));
+    setSelectedId(null);
+    setSelectedIds(new Set());
+    setMarqueeSelection(false);
+    setFocusedSheetId((focused) => focused && ids.has(focused) ? null : focused);
+    setEditingImageLabelId((editing) => editing && ids.has(editing) ? null : editing);
+    setEditingTextId((editing) => editing && ids.has(editing) ? null : editing);
   };
 
+  const deleteCard = (id: string) => deleteCards(new Set([id]));
+
   const convertTextToCode = (card: TextCard) => {
-    const code = plainTextFromBlocks(card.blocks.length ? card.blocks : blocksFromHtml(card.html));
+    const code = trimTrailingEmptyLines(plainTextFromBlocks(card.blocks.length ? card.blocks : blocksFromHtml(card.html)));
     const next: CodeCard = {
       id: card.id,
       type: "code",
@@ -553,7 +610,17 @@ export function CanvasWorkspace({
         onToolChange(shortcutTool);
         return;
       }
-      if ((event.key === "Delete" || event.key === "Backspace") && selectedId) deleteCard(selectedId);
+      if (event.key === "Delete" || event.key === "Backspace") {
+        const ids = selectedIds.size
+          ? selectedIds
+          : selectedId
+            ? new Set([selectedId])
+            : new Set<string>();
+        if (ids.size) {
+          event.preventDefault();
+          deleteCards(ids);
+        }
+      }
       if (event.key === "Escape") {
         setFocusedSheetId(null);
         setSelectedId(null);
@@ -579,27 +646,22 @@ export function CanvasWorkspace({
     const card = documentRef.current.cards.find((item) => item.id === cardId);
     if (!card || card.type !== "text") return;
 
-    const rightSlot = { x: card.x + card.w, y: card.y, w: 1, h: card.h };
-    const rightIsFree = !documentRef.current.cards.some(
-      (other) => other.id !== card.id && overlaps(rightSlot, other),
-    );
-    const lineCapacity = 34 * card.w;
-    const shouldWiden = card.w < 2 && rightIsFree && metrics.maxLineLength > lineCapacity;
+    const minimumWidth = metrics.maxLineLength > 34 ? 4 : 1;
+    const shouldWiden = card.w < minimumWidth;
     const contentHeightRows = Math.ceil((metrics.scrollHeight + GRID_GAP + 32) / stride);
-    const contentRows = Math.ceil(metrics.lineCount / 8);
-    const targetHeight = Math.max(contentHeightRows, contentRows, card.h);
+    const targetHeight = Math.max(contentHeightRows, card.h);
     contentMinimumsRef.current.set(card.id, {
-      w: metrics.maxLineLength > 34 ? 2 : 1,
-      h: Math.max(contentHeightRows, contentRows, 1),
+      w: minimumWidth,
+      h: Math.max(contentHeightRows, 1),
     });
     const shouldGrowDown = targetHeight > card.h;
     if (!shouldWiden && !shouldGrowDown) return;
 
     const target = shouldWiden
-      ? { ...card, w: card.w + 1 }
+      ? { ...card, w: minimumWidth }
       : { ...card, h: targetHeight };
     commitCards(
-      reflowCards(documentRef.current.cards, card.id, target, shouldWiden ? { x: 1, y: 0 } : { x: 0, y: 1 }),
+      reflowCards(documentRef.current.cards, card.id, target, shouldWiden ? { x: minimumWidth - card.w, y: 0 } : { x: 0, y: 1 }),
       false,
     );
   };
@@ -805,17 +867,30 @@ export function CanvasWorkspace({
           (event.target.isContentEditable || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName))
         ) return;
         const imageFiles = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/") || /\.ico$/i.test(file.name));
-        if (imageFiles.length) {
+        const text = event.clipboardData.getData("text/plain");
+        if (!text && imageFiles.length) {
           event.preventDefault();
           void addImageFiles(imageFiles);
           return;
         }
-        const text = event.clipboardData.getData("text/plain");
         if (!text) return;
+        const rich = event.clipboardData.getData("text/html");
         event.preventDefault();
         if (looksTabular(text)) addSpreadsheet(undefined, parseTable(text));
         else if (normalizeUrl(text)) void addLink(text);
-        else addText(undefined, `<div>${text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>")}</div>`);
+        else {
+          const converted = convertClipboardContent(rich, text);
+          if (converted.kind === "code") {
+            const placed = addCode(undefined, converted.code, converted.language);
+            if (imageFiles.length) void addPastedImagesAbove(placed, imageFiles, []);
+          } else {
+            const placed = addText(undefined, converted.html, pastedTextWidth(text));
+            if (converted.links.length) addLinksBesideCard(placed, converted.links);
+            if (imageFiles.length || converted.images.length) {
+              void addPastedImagesAbove(placed, imageFiles, converted.images);
+            }
+          }
+        }
       }}
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => {
@@ -891,6 +966,8 @@ export function CanvasWorkspace({
                   onFocus={() => setSelectedId(card.id)}
                   onActiveChange={(active) => setEditingTextId(active ? card.id : null)}
                   onConvertToCode={() => convertTextToCode(card)}
+                  onPasteLinks={(links) => addLinksBesideCard(card, links)}
+                  onPasteImages={(files, images) => { void addPastedImagesAbove(card, files, images); }}
                   onChange={(html, blocks) => updateCard(card.id, (current) => current.type === "text" ? { ...current, html, blocks } : current)}
                   onMeasure={(metrics) => handleTextMeasure(card.id, metrics)}
                 />

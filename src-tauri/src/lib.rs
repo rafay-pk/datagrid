@@ -555,8 +555,7 @@ fn download_image_data_url(client: &Client, url: &str) -> Option<String> {
     Some(format!("data:{mime};base64,{}", BASE64.encode(bytes)))
 }
 
-#[tauri::command]
-fn fetch_link_preview(url: String) -> Result<Value, String> {
+fn fetch_link_preview_blocking(url: String) -> Result<Value, String> {
     let parsed = Url::parse(&url).map_err(|error| error.to_string())?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err("Only HTTP and HTTPS links are supported.".to_string());
@@ -594,6 +593,34 @@ fn fetch_link_preview(url: String) -> Result<Value, String> {
     }))
 }
 
+#[tauri::command]
+async fn fetch_link_preview(url: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || fetch_link_preview_blocking(url))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn fetch_image_data_url_blocking(url: String) -> Result<String, String> {
+    let parsed = Url::parse(&url).map_err(|error| error.to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("Only HTTP and HTTPS image sources are supported.".to_string());
+    }
+    let client = Client::builder()
+        .timeout(Duration::from_secs(10))
+        .user_agent("Datagrid/0.1 pasted image")
+        .build()
+        .map_err(|error| error.to_string())?;
+    download_image_data_url(&client, parsed.as_str())
+        .ok_or_else(|| "Could not download the pasted image.".to_string())
+}
+
+#[tauri::command]
+async fn fetch_image_data_url(url: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || fetch_image_data_url_blocking(url))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -608,7 +635,8 @@ pub fn run() {
             duplicate_canvas,
             delete_canvas,
             reveal_library,
-            fetch_link_preview
+            fetch_link_preview,
+            fetch_image_data_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running Datagrid");

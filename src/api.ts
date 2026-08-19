@@ -175,4 +175,20 @@ export async function fetchLinkPreview(url: string): Promise<LinkPreview> {
   };
 }
 
+export async function fetchImageDataUrl(url: string): Promise<string> {
+  if (url.startsWith("data:image/")) return url;
+  if (isTauri) return invoke<string>("fetch_image_data_url", { url });
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Could not fetch pasted image (${response.status}).`);
+  const blob = await response.blob();
+  if (!blob.type.startsWith("image/")) throw new Error("The pasted image source did not return an image.");
+  if (blob.size > 5_000_000) throw new Error("The pasted image is larger than 5 MB.");
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read the pasted image."));
+    reader.onload = () => resolve(String(reader.result));
+    reader.readAsDataURL(blob);
+  });
+}
+
 export { isTauri };

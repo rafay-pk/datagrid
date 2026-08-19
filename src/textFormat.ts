@@ -58,6 +58,10 @@ export function plainTextFromBlocks(blocks: TextBlock[]): string {
   return blocks.map((block) => block.runs.map((run) => run.text).join("")).join("\n");
 }
 
+export function trimTrailingEmptyLines(value: string): string {
+  return value.replace(/(?:\r?\n[\t ]*)+$/, "");
+}
+
 export function normalizeUrl(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed || /\s/.test(trimmed)) return null;
