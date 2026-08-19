@@ -35,11 +35,11 @@ Every canvas is saved as a single OpenDocument Text (`.odt`) file containing its
 - Full undo and redo history (`Ctrl+Z` / `Ctrl+Y`)
 
 **Cards**
-- Text cards with headings, bold, italic, and lists
+- Text cards with headings, bold, italic, and lists, plus syntax-highlighted code cards
 - Image cards
 - Spreadsheet cards with formulas and calculated columns
 - Link cards with automatically fetched previews and accent colors
-- Quick-switch tool shortcuts: select (`H`), text (`T`), image (`M`), spreadsheet (`S`), link (`L`)
+- Quick-switch tool shortcuts: select (`H`), text (`T`), code (`C`), image (`M`), spreadsheet (`S`), link (`L`)
 
 **Appearance**
 - Light and dark themes

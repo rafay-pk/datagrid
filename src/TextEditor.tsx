@@ -1,13 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { blocksFromHtml, normalizeUrl } from "./textFormat";
 import type { TextBlock } from "./types";
-import { BoldIcon, BulletListIcon, ChecklistIcon, ItalicIcon, NumberedListIcon, UnderlineIcon } from "./icons";
+import { BoldIcon, BulletListIcon, ChecklistIcon, CodeIcon, ItalicIcon, NumberedListIcon, UnderlineIcon } from "./icons";
 
 interface TextEditorProps {
   html: string;
   onChange: (html: string, blocks: TextBlock[]) => void;
   onFocus: () => void;
   onActiveChange?: (active: boolean) => void;
+  onConvertToCode: () => void;
   onMeasure: (metrics: {
     scrollHeight: number;
     clientHeight: number;
@@ -178,7 +179,7 @@ function sanitizeClipboardHtml(html: string): string {
   return template.innerHTML;
 }
 
-export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure }: TextEditorProps) {
+export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertToCode, onMeasure }: TextEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   const measureFrameRef = useRef<number | null>(null);
   const inputEventCountRef = useRef(0);
@@ -302,6 +303,8 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onMeasure 
           <button type="button" title="Bulleted list" onClick={() => runCommand("insertUnorderedList")}><BulletListIcon size={14}/></button>
           <button type="button" title="Numbered list" onClick={() => runCommand("insertOrderedList")}><NumberedListIcon size={14}/></button>
           <button type="button" title="Checklist" onClick={runChecklistToggle}><ChecklistIcon size={14}/></button>
+          <span className="text-toolbar-divider"/>
+          <button type="button" title="Convert to code card" aria-label="Convert to code card" onClick={onConvertToCode}><CodeIcon size={14}/></button>
         </div>
       )}
       <div

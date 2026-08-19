@@ -1,6 +1,6 @@
 export type Theme = "light" | "dark";
 
-export type CardType = "text" | "image" | "spreadsheet" | "link";
+export type CardType = "text" | "code" | "image" | "spreadsheet" | "link";
 
 export interface GridRect {
   x: number;
@@ -37,6 +37,12 @@ export interface TextCard extends CardBase {
   blocks: TextBlock[];
 }
 
+export interface CodeCard extends CardBase {
+  type: "code";
+  code: string;
+  language: string;
+}
+
 export interface ImageCard extends CardBase {
   type: "image";
   label?: string;
@@ -71,7 +77,7 @@ export interface LinkCard extends CardBase {
   preview: LinkPreview;
 }
 
-export type CanvasCard = TextCard | ImageCard | SpreadsheetCard | LinkCard;
+export type CanvasCard = TextCard | CodeCard | ImageCard | SpreadsheetCard | LinkCard;
 
 export interface CanvasViewport {
   x: number;
