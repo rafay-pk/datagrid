@@ -16,6 +16,7 @@ import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import { CodeIcon, TextIcon } from "./icons";
+import { trimTrailingEmptyLines } from "./textFormat";
 
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("cpp", cpp);
@@ -175,7 +176,19 @@ export function CodeEditor({
             pre.scrollTop = event.currentTarget.scrollTop;
             pre.scrollLeft = event.currentTarget.scrollLeft;
           }}
-          onPointerDown={(event) => event.stopPropagation()}
+          onPointerDown={(event) => {
+            if (event.button === 0) event.stopPropagation();
+          }}
+          onPaste={(event) => {
+            event.preventDefault();
+            const input = event.currentTarget;
+            const start = input.selectionStart;
+            const pasted = trimTrailingEmptyLines(event.clipboardData.getData("text/plain"));
+            onChange(`${code.slice(0, start)}${pasted}${code.slice(input.selectionEnd)}`);
+            requestAnimationFrame(() => {
+              input.selectionStart = input.selectionEnd = start + pasted.length;
+            });
+          }}
           onKeyDown={(event) => {
             if (event.key !== "Tab") return;
             event.preventDefault();

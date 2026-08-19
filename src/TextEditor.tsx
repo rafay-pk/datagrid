@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { blocksFromHtml, normalizeUrl } from "./textFormat";
+import { convertClipboardContent } from "./clipboardFormat";
+import type { ClipboardImage } from "./clipboardFormat";
 import type { TextBlock } from "./types";
 import { BoldIcon, BulletListIcon, ChecklistIcon, CodeIcon, ItalicIcon, NumberedListIcon, UnderlineIcon } from "./icons";
 
@@ -9,6 +11,8 @@ interface TextEditorProps {
   onFocus: () => void;
   onActiveChange?: (active: boolean) => void;
   onConvertToCode: () => void;
+  onPasteLinks: (links: string[]) => void;
+  onPasteImages: (files: File[], images: ClipboardImage[]) => void;
   onMeasure: (metrics: {
     scrollHeight: number;
     clientHeight: number;
@@ -142,44 +146,7 @@ function toggleChecklist(editor: HTMLElement): void {
   }
 }
 
-function sanitizeClipboardHtml(html: string): string {
-  const template = document.createElement("template");
-  template.innerHTML = html;
-  const allowed = new Set(["DIV", "P", "BR", "STRONG", "B", "EM", "I", "U", "A", "UL", "OL", "LI", "H1", "H2"]);
-  for (const element of Array.from(template.content.querySelectorAll("*"))) {
-    if (!allowed.has(element.tagName)) {
-      element.replaceWith(...Array.from(element.childNodes));
-      continue;
-    }
-    for (const attribute of Array.from(element.attributes)) {
-      if (!(element.tagName === "A" && attribute.name.toLowerCase() === "href")) {
-        element.removeAttribute(attribute.name);
-      }
-    }
-  }
-
-  const textNodes: Text[] = [];
-  const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
-  while (walker.nextNode()) textNodes.push(walker.currentNode as Text);
-  for (const node of textNodes) {
-    node.data = node.data.replace(/^[\s\u00a0]+/u, "");
-    if (node.data) break;
-  }
-  for (let index = textNodes.length - 1; index >= 0; index -= 1) {
-    const node = textNodes[index];
-    node.data = node.data.replace(/[\s\u00a0]+$/u, "");
-    if (node.data) break;
-  }
-  while (template.content.firstChild && !(template.content.firstChild.textContent ?? "").trim()) {
-    template.content.firstChild.remove();
-  }
-  while (template.content.lastChild && !(template.content.lastChild.textContent ?? "").trim()) {
-    template.content.lastChild.remove();
-  }
-  return template.innerHTML;
-}
-
-export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertToCode, onMeasure }: TextEditorProps) {
+export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertToCode, onPasteLinks, onPasteImages, onMeasure }: TextEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   const measureFrameRef = useRef<number | null>(null);
   const inputEventCountRef = useRef(0);
@@ -207,10 +174,25 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertT
     const editor = editorRef.current;
     if (!editor) return;
     const lines = editor.innerText.replace(/\u00a0/g, " ").split(/\r?\n/);
-    const previousHeight = editor.style.height;
-    editor.style.height = "0px";
-    const contentHeight = editor.scrollHeight;
-    editor.style.height = previousHeight;
+    const clone = editor.cloneNode(true) as HTMLDivElement;
+    clone.removeAttribute("contenteditable");
+    Object.assign(clone.style, {
+      position: "fixed",
+      inset: "auto",
+      left: "-10000px",
+      top: "0",
+      width: `${editor.clientWidth}px`,
+      height: "auto",
+      minHeight: "0",
+      maxHeight: "none",
+      margin: "0",
+      overflow: "visible",
+      visibility: "hidden",
+      pointerEvents: "none",
+    });
+    document.body.appendChild(clone);
+    const contentHeight = Math.ceil(Math.max(clone.scrollHeight, clone.getBoundingClientRect().height));
+    clone.remove();
     onMeasureRef.current({
       scrollHeight: contentHeight,
       clientHeight: editor.clientHeight,
@@ -375,20 +357,31 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertT
         }}
         onPaste={(event) => {
           event.stopPropagation();
-          const text = event.clipboardData.getData("text/plain").trim();
-          const url = normalizeUrl(text);
+          const text = event.clipboardData.getData("text/plain");
+          const rich = event.clipboardData.getData("text/html");
+          const imageFiles = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
+          const url = normalizeUrl(text.trim());
           const inputEventCount = inputEventCountRef.current;
           event.preventDefault();
-          if (url) {
+          if (url && !rich) {
+            const label = text.trim()
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;");
             document.execCommand(
               "insertHTML",
               false,
-              `<a href="${url.replace(/"/g, "&quot;")}" target="_blank" rel="noreferrer">${text}</a>`,
+              `<u>${label}</u>`,
             );
+            onPasteLinks([url]);
           } else {
-            const rich = event.clipboardData.getData("text/html");
-            if (rich) document.execCommand("insertHTML", false, sanitizeClipboardHtml(rich));
-            else document.execCommand("insertText", false, text);
+            const converted = convertClipboardContent(rich, text);
+            if (converted.kind === "code") document.execCommand("insertText", false, converted.code);
+            else {
+              document.execCommand("insertHTML", false, converted.html);
+              if (converted.links.length) onPasteLinks(converted.links);
+              if (imageFiles.length || converted.images.length) onPasteImages(imageFiles, converted.images);
+            }
           }
           if (inputEventCountRef.current === inputEventCount) emitChange();
         }}
