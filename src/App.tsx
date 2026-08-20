@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { CanvasWorkspace } from "./CanvasWorkspace";
 import bindersIcon from "./assets/binders.svg";
 import {
@@ -23,14 +23,16 @@ import {
 import {
   ChevronIcon,
   CopyIcon,
+  EditIcon,
   FolderIcon,
   GridIcon,
-  MoonIcon,
   MoreIcon,
+  MoonIcon,
   PlusIcon,
   RedoIcon,
   SearchIcon,
   SunIcon,
+  TransparencyIcon,
   TrashIcon,
   UndoIcon,
   XIcon,
@@ -48,6 +50,7 @@ import {
 import "./styles.css";
 
 const SESSION_KEY = "datagrid-session-v1";
+const GITHUB_SYNC_INTERVAL_MS = 120_000;
 const CANVAS_EMOJIS = ["🗂️", "📝", "💡", "🎯", "📚", "🧠", "🧪", "🎨", "🚀", "🌱", "⭐", "❤️", "🔥", "📌", "🏠", "💼"];
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
@@ -64,6 +67,7 @@ const defaultSession: SessionState = {
   uiScale: 1,
   sidebarCollapsed: false,
   randomColors: false,
+  showTransparencyGrid: true,
 };
 
 function loadSession(): SessionState {
@@ -96,6 +100,114 @@ interface HistoryState {
   future: CanvasDocument[];
 }
 
+function repositoryDisplayName(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] ?? "Repository";
+}
+
+interface CanvasDetailsDialogProps {
+  mode: "new" | "edit";
+  icon: ReactNode;
+  name: string;
+  emoji: string;
+  submitting: boolean;
+  inputRef?: RefObject<HTMLInputElement | null>;
+  onNameChange: (name: string) => void;
+  onEmojiChange: (emoji: string) => void;
+  onCancel: () => void;
+  onSubmit: () => void;
+}
+
+function CanvasDetailsDialog({
+  mode,
+  icon,
+  name,
+  emoji,
+  submitting,
+  inputRef,
+  onNameChange,
+  onEmojiChange,
+  onCancel,
+  onSubmit,
+}: CanvasDetailsDialogProps) {
+  const titleId = `${mode}-canvas-dialog-title`;
+  return (
+    <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
+      <form
+        className="small-dialog canvas-details-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onSubmit={(event) => { event.preventDefault(); onSubmit(); }}
+        onKeyDown={(event) => { if (event.key === "Escape") onCancel(); }}
+      >
+        <span className="dialog-icon">{icon}</span>
+        <h2 id={titleId}>{mode === "new" ? "New canvas" : "Edit canvas"}</h2>
+        <p>Set the title and icon for this canvas.</p>
+        <label className="dialog-field-label" htmlFor={`${mode}-canvas-name`}>Title</label>
+        <input
+          id={`${mode}-canvas-name`}
+          ref={inputRef}
+          autoFocus
+          value={name}
+          onChange={(event) => onNameChange(event.currentTarget.value)}
+          placeholder="Canvas name"
+          aria-label="Canvas name"
+          maxLength={100}
+          disabled={submitting}
+        />
+        <span className="dialog-field-label">Icon</span>
+        <div className="canvas-emoji-options" aria-label="Canvas icon">
+          {CANVAS_EMOJIS.map((option) => (
+            <button
+              type="button"
+              key={option}
+              className={emoji === option ? "active" : ""}
+              aria-label={`Use ${option} icon`}
+              aria-pressed={emoji === option}
+              onClick={() => onEmojiChange(option)}
+              disabled={submitting}
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+        <label className="custom-emoji-field">
+          <span>Custom icon</span>
+          <input
+            value={emoji}
+            onChange={(event) => onEmojiChange(firstGrapheme(event.currentTarget.value))}
+            aria-label="Custom canvas icon"
+            disabled={submitting}
+          />
+        </label>
+        <div className="dialog-actions">
+          <button type="button" onClick={onCancel} disabled={submitting}>Cancel</button>
+          <button type="submit" className="primary-action compact" disabled={!name.trim() || submitting}>
+            {submitting ? "Saving…" : mode === "new" ? "Create canvas" : "Save changes"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+type FileSyncPhase = "saving" | "queued" | "uploading" | "synced" | "error";
+
+interface FileSyncItem {
+  path: string;
+  name: string;
+  phase: FileSyncPhase;
+}
+
+function fileSyncLabel(phase: FileSyncPhase): string {
+  if (phase === "saving") return "Saving locally";
+  if (phase === "queued") return "Queued";
+  if (phase === "uploading") return "Uploading";
+  if (phase === "synced") return "Synced";
+  return "Retry needed";
+}
+
 export default function App() {
   const initialSession = useMemo(loadSession, []);
   const [libraryFolder, setLibraryFolder] = useState(initialSession.libraryFolder);
@@ -109,23 +221,34 @@ export default function App() {
   const [tool, setTool] = useState<Tool>("select");
   const [color, setColor] = useState<string>(CARD_COLORS[0]);
   const [randomColors, setRandomColors] = useState(Boolean(initialSession.randomColors));
+  const [showTransparencyGrid, setShowTransparencyGrid] = useState(initialSession.showTransparencyGrid !== false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [newCanvasOpen, setNewCanvasOpen] = useState(false);
   const [newCanvasName, setNewCanvasName] = useState("");
+  const [newCanvasEmoji, setNewCanvasEmoji] = useState("🗂️");
+  const [newCanvasSubmitting, setNewCanvasSubmitting] = useState(false);
+  const [renamingFile, setRenamingFile] = useState<CanvasFile | null>(null);
+  const [renameCanvasName, setRenameCanvasName] = useState("");
+  const [renameCanvasEmoji, setRenameCanvasEmoji] = useState("🗂️");
+  const [renameSubmitting, setRenameSubmitting] = useState(false);
   const [loading, setLoading] = useState(Boolean(libraryFolder));
   const [error, setError] = useState<string | null>(null);
-  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
-  const [customEmoji, setCustomEmoji] = useState("");
   const [gitEnvironment, setGitEnvironment] = useState<GitEnvironment | null>(null);
   const [repositoryUrl, setRepositoryUrl] = useState("");
   const [connectingRepository, setConnectingRepository] = useState(false);
   const [repositorySetupFolder, setRepositorySetupFolder] = useState<string | null>(null);
   const [repositorySetupFolderEmpty, setRepositorySetupFolderEmpty] = useState(true);
   const [repositoryStatus, setRepositoryStatus] = useState<RepositoryStatus | null>(null);
+  const [repositoryMenuOpen, setRepositoryMenuOpen] = useState(false);
+  const [fileSyncItems, setFileSyncItems] = useState<FileSyncItem[]>([]);
   const repositoryStatusRef = useRef<RepositoryStatus | null>(null);
   const syncInFlightRef = useRef(false);
-  const statusRefreshInFlightRef = useRef(false);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  const tabStripRef = useRef<HTMLDivElement>(null);
+  const activeTabRef = useRef<HTMLButtonElement>(null);
+  const [canScrollTabsLeft, setCanScrollTabsLeft] = useState(false);
+  const [canScrollTabsRight, setCanScrollTabsRight] = useState(false);
 
   useEffect(() => {
     void getGitEnvironment()
@@ -137,10 +260,51 @@ export default function App() {
     repositoryStatusRef.current = repositoryStatus;
   }, [repositoryStatus]);
 
+  const updateTabScrollState = useCallback(() => {
+    const strip = tabStripRef.current;
+    if (!strip) return;
+    setCanScrollTabsLeft(strip.scrollLeft > 2);
+    setCanScrollTabsRight(strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 2);
+  }, []);
+
+  const tabLayoutKey = openCanvases.map((canvas) => `${canvas.path}:${canvas.document.name}`).join("|");
+
   useEffect(() => {
-    setEmojiPickerOpen(false);
-    setCustomEmoji("");
-  }, [activePath]);
+    const strip = tabStripRef.current;
+    if (!strip) return;
+    const frame = window.requestAnimationFrame(updateTabScrollState);
+    const observer = new ResizeObserver(updateTabScrollState);
+    observer.observe(strip);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [tabLayoutKey, updateTabScrollState]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      activeTabRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+      updateTabScrollState();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activePath, updateTabScrollState]);
+
+  const scrollTabs = (direction: -1 | 1) => {
+    const strip = tabStripRef.current;
+    if (!strip) return;
+    strip.scrollBy({ left: direction * Math.max(180, strip.clientWidth * 0.7), behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    setFileSyncItems([]);
+  }, [libraryFolder]);
+
+  useEffect(() => {
+    if (!renamingFile) return;
+    const frame = window.requestAnimationFrame(() => renameInputRef.current?.select());
+    return () => window.cancelAnimationFrame(frame);
+  }, [renamingFile]);
+
   const histories = useRef(new Map<string, HistoryState>());
   const canvasesRef = useRef(openCanvases);
 
@@ -157,28 +321,17 @@ export default function App() {
     }
   }, [libraryFolder]);
 
-  const refreshRepositoryStatus = useCallback(async () => {
-    if (!libraryFolder || statusRefreshInFlightRef.current) return;
-    statusRefreshInFlightRef.current = true;
-    try {
-      setRepositoryStatus(await getRepositoryStatus(libraryFolder));
-    } catch (reason) {
-      setRepositoryStatus({
-        state: "error",
-        message: "Git status unavailable",
-        ahead: 0,
-        behind: 0,
-      });
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      statusRefreshInFlightRef.current = false;
-    }
-  }, [libraryFolder]);
+  const markFileSync = useCallback((path: string, name: string, phase: FileSyncPhase) => {
+    setFileSyncItems((current) => [
+      ...current.filter((item) => item.path !== path),
+      { path, name, phase },
+    ].slice(-5));
+  }, []);
 
-  const showBackgroundSync = useCallback(() => {
+  const showQueuedSync = useCallback(() => {
     setRepositoryStatus((current) => ({
-      state: "syncing",
-      message: "Saved locally — syncing with GitHub…",
+      state: "local",
+      message: "Changes queued — GitHub sync runs every 2 minutes",
       ahead: current?.ahead ?? 0,
       behind: current?.behind ?? 0,
       latestCommit: current?.latestCommit,
@@ -310,15 +463,22 @@ export default function App() {
     const current = repositoryStatusRef.current;
     setRepositoryStatus({
       state: "syncing",
-      message: current?.ahead ? `Pushing ${current.ahead} local commit${current.ahead === 1 ? "" : "s"}…` : "Checking GitHub connection…",
+      message: "Uploading queued canvas changes…",
       ahead: current?.ahead ?? 0,
       behind: current?.behind ?? 0,
       latestCommit: current?.latestCommit,
       latestCommitAt: current?.latestCommitAt,
     });
+    setFileSyncItems((items) => items.map((item) => item.phase === "synced" ? item : { ...item, phase: "uploading" }));
     try {
-      setRepositoryStatus(await pushPendingCommits(libraryFolder));
+      const nextStatus = await pushPendingCommits(libraryFolder);
+      setRepositoryStatus(nextStatus);
+      const completed = nextStatus.state === "synced" || nextStatus.state === "ready";
+      setFileSyncItems((items) => items.map((item) => item.phase === "uploading"
+        ? { ...item, phase: completed ? "synced" : "error" }
+        : item));
     } catch (reason) {
+      setFileSyncItems((items) => items.map((item) => item.phase === "uploading" ? { ...item, phase: "error" } : item));
       try {
         const local = await getRepositoryStatus(libraryFolder);
         setRepositoryStatus(local.state === "local" ? local : {
@@ -344,28 +504,18 @@ export default function App() {
 
   useEffect(() => {
     if (!libraryFolder) return;
-    const timer = window.setInterval(() => {
-      const status = repositoryStatusRef.current;
-      if (status?.ahead) {
-        void retryPendingPush(false);
-      }
-    }, 30_000);
-    return () => window.clearInterval(timer);
-  }, [libraryFolder, retryPendingPush]);
-
-  useEffect(() => {
-    if (!libraryFolder) return;
-    const timer = window.setInterval(() => {
-      const status = repositoryStatusRef.current;
-      if (status?.state === "syncing" || status?.state === "local") {
-        void refreshRepositoryStatus();
-      }
-    }, 2_000);
-    return () => window.clearInterval(timer);
-  }, [libraryFolder, refreshRepositoryStatus]);
+    const hasPendingFiles = fileSyncItems.some((item) => item.phase === "queued" || item.phase === "error");
+    if (!hasPendingFiles) return;
+    const timer = window.setTimeout(() => {
+      const localSaveInProgress = canvasesRef.current.some((canvas) => canvas.dirty || canvas.saving);
+      if (!localSaveInProgress) void retryPendingPush(false);
+    }, GITHUB_SYNC_INTERVAL_MS);
+    return () => window.clearTimeout(timer);
+  }, [fileSyncItems, libraryFolder, retryPendingPush]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
+    document.documentElement.dataset.transparencyGrid = showTransparencyGrid ? "visible" : "hidden";
     document.documentElement.style.setProperty("--ui-scale", String(uiScale));
     document.documentElement.style.setProperty("--app-font", `"${font}", sans-serif`);
     const session: SessionState = {
@@ -377,13 +527,15 @@ export default function App() {
       uiScale,
       sidebarCollapsed,
       randomColors,
+      showTransparencyGrid,
     };
     localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-  }, [activePath, font, libraryFolder, openCanvases, randomColors, sidebarCollapsed, theme, uiScale]);
+  }, [activePath, font, libraryFolder, openCanvases, randomColors, showTransparencyGrid, sidebarCollapsed, theme, uiScale]);
 
   const saveCanvasNow = useCallback(async (path: string) => {
     const canvas = canvasesRef.current.find((item) => item.path === path);
     if (!canvas?.dirty || canvas.saving) return;
+    markFileSync(path, canvas.document.name, "saving");
     const documentToSave = structuredClone(canvas.document);
     const contentKeyToSave = savedContentKey(documentToSave);
     const savingState = canvasesRef.current.map((item) => item.path === path ? { ...item, saving: true } : item);
@@ -402,18 +554,23 @@ export default function App() {
       setOpenCanvases(savedState);
       setRepositoryStatus((current) => ({
         ...result.status,
+        message: "Changes queued — GitHub sync runs every 2 minutes",
         latestCommit: result.status.latestCommit ?? current?.latestCommit,
         latestCommitAt: result.status.latestCommitAt ?? current?.latestCommitAt,
       }));
+      markFileSync(path, documentToSave.name, "queued");
       if (result.warning) setError(result.warning);
-      void refreshFiles();
+      setFiles((current) => current.map((file) => file.path === path
+        ? { ...file, name: documentToSave.name, modifiedAt: savedAt, emoji: documentToSave.emoji }
+        : file));
     } catch (reason) {
       const failedState = canvasesRef.current.map((item) => item.path === path ? { ...item, saving: false } : item);
       canvasesRef.current = failedState;
       setOpenCanvases(failedState);
+      markFileSync(path, canvas.document.name, "error");
       setError(`Couldn’t save ${canvas.document.name}: ${reason instanceof Error ? reason.message : String(reason)}`);
     }
-  }, [refreshFiles]);
+  }, [markFileSync]);
 
   useEffect(() => {
     if (!openCanvases.some((canvas) => canvas.dirty && !canvas.saving)) return;
@@ -421,7 +578,7 @@ export default function App() {
       for (const canvas of canvasesRef.current) {
         if (canvas.dirty && !canvas.saving) void saveCanvasNow(canvas.path);
       }
-    }, 750);
+    }, 2_000);
     return () => window.clearTimeout(timer);
   }, [openCanvases, saveCanvasNow]);
 
@@ -446,6 +603,10 @@ export default function App() {
       : canvas);
     canvasesRef.current = changed;
     setOpenCanvases(changed);
+    if (markDirty) {
+      markFileSync(activePath, next.name, "saving");
+      showQueuedSync();
+    }
   };
 
   const undo = () => {
@@ -569,17 +730,39 @@ export default function App() {
 
   const addCanvas = async () => {
     const name = newCanvasName.trim() || "Untitled canvas";
+    const emoji = firstGrapheme(newCanvasEmoji) || "🗂️";
+    setNewCanvasSubmitting(true);
     try {
-      const file = await createCanvas(libraryFolder, name);
+      const file = await createCanvas(libraryFolder, name, emoji);
       if (file.warning) setError(file.warning);
       setNewCanvasName("");
+      setNewCanvasEmoji("🗂️");
       setNewCanvasOpen(false);
-      showBackgroundSync();
+      markFileSync(file.path, file.name, "queued");
+      showQueuedSync();
       await refreshFiles();
       await openFile(file);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setNewCanvasSubmitting(false);
     }
+  };
+
+  const copyRepositoryPath = async () => {
+    try {
+      await navigator.clipboard.writeText(libraryFolder);
+      setRepositoryMenuOpen(false);
+    } catch (reason) {
+      setError(`Couldn’t copy the repository path: ${reason instanceof Error ? reason.message : String(reason)}`);
+    }
+  };
+
+  const closeNewCanvasDialog = () => {
+    if (newCanvasSubmitting) return;
+    setNewCanvasOpen(false);
+    setNewCanvasName("");
+    setNewCanvasEmoji("🗂️");
   };
 
   const closeTab = (path: string) => {
@@ -592,21 +775,78 @@ export default function App() {
     if (activePath === path) setActivePath(next[Math.max(0, index - 1)]?.path ?? next[0]?.path ?? null);
   };
 
-  const handleRename = async (file: CanvasFile) => {
-    const name = window.prompt("Rename canvas", file.name)?.trim();
-    if (!name || name === file.name) return;
+  const openRenameDialog = (file: CanvasFile) => {
+    const openCanvas = canvasesRef.current.find((canvas) => canvas.path === file.path);
+    setRenamingFile(file);
+    setRenameCanvasName(file.name);
+    setRenameCanvasEmoji(openCanvas?.document.emoji || file.emoji || "🗂️");
+  };
+
+  const closeRenameDialog = () => {
+    if (renameSubmitting) return;
+    setRenamingFile(null);
+    setRenameCanvasName("");
+    setRenameCanvasEmoji("🗂️");
+  };
+
+  const handleRename = async () => {
+    const file = renamingFile;
+    const name = renameCanvasName.trim();
+    if (!file || !name) return;
+    const openCanvas = canvasesRef.current.find((canvas) => canvas.path === file.path);
+    const currentEmoji = openCanvas?.document.emoji || file.emoji || "🗂️";
+    const emoji = firstGrapheme(renameCanvasEmoji) || "🗂️";
+    const nameChanged = name !== file.name;
+    const emojiChanged = emoji !== currentEmoji;
+    if (!nameChanged && !emojiChanged) {
+      closeRenameDialog();
+      return;
+    }
+    setRenameSubmitting(true);
     try {
-      const renamed = await renameCanvas(file.path, name);
+      const renamed = nameChanged ? await renameCanvas(file.path, name) : file;
       if (renamed.warning) setError(renamed.warning);
-      setOpenCanvases((current) => current.map((canvas) => canvas.path === file.path ? { ...canvas, path: renamed.path, document: { ...canvas.document, name: renamed.name } } : canvas));
-      canvasesRef.current = canvasesRef.current.map((canvas) => canvas.path === file.path ? { ...canvas, path: renamed.path, document: { ...canvas.document, name: renamed.name } } : canvas);
-      histories.current.set(renamed.path, histories.current.get(file.path) ?? { past: [], future: [] });
-      histories.current.delete(file.path);
+      const updatedCanvases = canvasesRef.current.map((canvas) => canvas.path === file.path ? {
+        ...canvas,
+        path: renamed.path,
+        dirty: emojiChanged ? true : canvas.dirty,
+        document: {
+          ...canvas.document,
+          name: renamed.name,
+          emoji,
+          updatedAt: new Date().toISOString(),
+        },
+      } : canvas);
+      canvasesRef.current = updatedCanvases;
+      setOpenCanvases(updatedCanvases);
+
+      if (!openCanvas && emojiChanged) {
+        const document = await loadCanvas(renamed.path);
+        const result = await saveCanvas(renamed.path, {
+          ...document,
+          name: renamed.name,
+          emoji,
+          updatedAt: new Date().toISOString(),
+        });
+        setRepositoryStatus(result.status);
+        if (result.warning) setError(result.warning);
+      }
+      if (renamed.path !== file.path) {
+        histories.current.set(renamed.path, histories.current.get(file.path) ?? { past: [], future: [] });
+        histories.current.delete(file.path);
+        setFileSyncItems((items) => items.filter((item) => item.path !== file.path));
+      }
       if (activePath === file.path) setActivePath(renamed.path);
-      showBackgroundSync();
+      setRenamingFile(null);
+      setRenameCanvasName("");
+      setRenameCanvasEmoji("🗂️");
+      markFileSync(renamed.path, renamed.name, emojiChanged && openCanvas ? "saving" : "queued");
+      showQueuedSync();
       await refreshFiles();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setRenameSubmitting(false);
     }
   };
 
@@ -614,7 +854,8 @@ export default function App() {
     try {
       const copy = await duplicateCanvas(file.path);
       if (copy.warning) setError(copy.warning);
-      showBackgroundSync();
+      markFileSync(copy.path, copy.name, "queued");
+      showQueuedSync();
       await refreshFiles();
       await openFile(copy);
     } catch (reason) {
@@ -626,7 +867,13 @@ export default function App() {
     if (!window.confirm(`Move “${file.name}” to Datagrid’s recovery folder?`)) return;
     try {
       const result = await deleteCanvas(file.path);
-      setRepositoryStatus(result.status);
+      setRepositoryStatus((current) => ({
+        ...result.status,
+        message: "Changes queued — GitHub sync runs every 2 minutes",
+        latestCommit: result.status.latestCommit ?? current?.latestCommit,
+        latestCommitAt: result.status.latestCommitAt ?? current?.latestCommitAt,
+      }));
+      markFileSync(file.path, file.name, "queued");
       if (result.warning) setError(result.warning);
       closeTab(file.path);
       await refreshFiles();
@@ -644,18 +891,8 @@ export default function App() {
     }));
     canvasesRef.current = changed;
     setOpenCanvases(changed);
-  };
-
-  const applyCanvasEmoji = (emoji: string) => {
-    const nextEmoji = firstGrapheme(emoji);
-    if (!activeCanvas || !nextEmoji) return;
-    updateActiveDocument({
-      ...activeCanvas.document,
-      emoji: nextEmoji,
-      updatedAt: new Date().toISOString(),
-    });
-    setCustomEmoji("");
-    setEmojiPickerOpen(false);
+    for (const canvas of changed) markFileSync(canvas.path, canvas.document.name, "saving");
+    showQueuedSync();
   };
 
   if (!libraryFolder) {
@@ -756,23 +993,45 @@ export default function App() {
           </button>
         </div>
 
-        <div className="tab-strip" role="tablist">
-          {openCanvases.map((canvas) => (
-            <button
-              key={canvas.path}
-              role="tab"
-              aria-selected={canvas.path === activePath}
-              className={`canvas-tab${canvas.path === activePath ? " active" : ""}`}
-              onClick={() => setActivePath(canvas.path)}
-            >
-              <span className="tab-emoji">{canvas.document.emoji || "🗂️"}</span>
-              <span className="tab-name">{canvas.document.name}</span>
-              <span className={`tab-save-state${canvas.saving || canvas.dirty ? " unsaved" : " saved"}`}/>
-              {canvas.saving && <span className="saving-spinner"/>}
-              <span className="tab-close" role="button" tabIndex={0} onClick={(event) => { event.stopPropagation(); closeTab(canvas.path); }}><XIcon size={13}/></span>
+        <div className="tab-region">
+          {canScrollTabsLeft && (
+            <button className="tab-scroll-button left" title="Scroll tabs left" onClick={() => scrollTabs(-1)}>
+              <ChevronIcon size={15}/>
             </button>
-          ))}
-          <button className="new-tab-button" title="New canvas" onClick={() => setNewCanvasOpen(true)}><PlusIcon size={17}/></button>
+          )}
+          <div
+            ref={tabStripRef}
+            className="tab-strip"
+            role="tablist"
+            onScroll={updateTabScrollState}
+            onWheel={(event) => {
+              if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+              event.currentTarget.scrollLeft += event.deltaY;
+            }}
+          >
+            {openCanvases.map((canvas) => (
+              <button
+                ref={canvas.path === activePath ? activeTabRef : undefined}
+                key={canvas.path}
+                role="tab"
+                aria-selected={canvas.path === activePath}
+                className={`canvas-tab${canvas.path === activePath ? " active" : ""}`}
+                onClick={() => setActivePath(canvas.path)}
+              >
+                <span className="tab-emoji">{canvas.document.emoji || "🗂️"}</span>
+                <span className="tab-name">{canvas.document.name}</span>
+                <span className={`tab-save-state${canvas.saving || canvas.dirty ? " unsaved" : " saved"}`}/>
+                {canvas.saving && <span className="saving-spinner"/>}
+                <span className="tab-close" role="button" tabIndex={0} onClick={(event) => { event.stopPropagation(); closeTab(canvas.path); }}><XIcon size={13}/></span>
+              </button>
+            ))}
+            <button className="new-tab-button" title="New canvas" onClick={() => setNewCanvasOpen(true)}><PlusIcon size={17}/></button>
+          </div>
+          {canScrollTabsRight && (
+            <button className="tab-scroll-button right" title="Scroll tabs right" onClick={() => scrollTabs(1)}>
+              <ChevronIcon size={15}/>
+            </button>
+          )}
         </div>
 
         <div className="topbar-actions">
@@ -785,6 +1044,15 @@ export default function App() {
           <select className="font-select" value={font} onChange={(event) => applyFont(event.currentTarget.value)} title="Application and document font">
             {FONT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
+          <button
+            className={`top-icon-button${showTransparencyGrid ? " active" : ""}`}
+            title={`${showTransparencyGrid ? "Hide" : "Show"} transparency grid`}
+            aria-label={`${showTransparencyGrid ? "Hide" : "Show"} transparency grid`}
+            aria-pressed={showTransparencyGrid}
+            onClick={() => setShowTransparencyGrid((visible) => !visible)}
+          >
+            <TransparencyIcon size={18}/>
+          </button>
           <button className="theme-toggle" title={`Use ${theme === "light" ? "dark" : "light"} theme`} onClick={() => setTheme((value) => value === "light" ? "dark" : "light")}>
             <span className={`theme-toggle-thumb ${theme}`}><SunIcon size={14}/><MoonIcon size={14}/></span>
           </button>
@@ -807,7 +1075,7 @@ export default function App() {
               </button>
               <div className="file-actions">
                 <button title="Duplicate" onClick={() => void handleDuplicate(file)}><CopyIcon size={14}/></button>
-                <button title="Rename" onClick={() => void handleRename(file)}><MoreIcon size={15}/></button>
+                <button title="Rename" onClick={() => openRenameDialog(file)}><EditIcon size={15}/></button>
                 <button title="Delete" onClick={() => void handleDelete(file)}><TrashIcon size={14}/></button>
               </div>
             </div>
@@ -816,71 +1084,107 @@ export default function App() {
         </div>
         <div className="library-footer">
           <div className={`repository-status ${repositoryStatus?.state ?? "syncing"}`} aria-live="polite">
-            <span className="repository-status-dot"/>
-            <div>
-              <strong>{repositoryStatus?.message ?? "Reading Git status…"}</strong>
-              {repositoryStatus?.latestCommit && (
-                <span title={repositoryStatus.latestCommit}>
-                  Latest: {repositoryStatus.latestCommit}
-                  {repositoryStatus.latestCommitAt ? ` · ${fileTime(repositoryStatus.latestCommitAt)}` : ""}
-                </span>
+            <div className="repository-status-summary">
+              <span className="repository-status-dot"/>
+              <div className="repository-status-copy">
+                <strong>{repositoryStatus?.message ?? "Reading Git status…"}</strong>
+                {repositoryStatus?.latestCommit && (
+                  <span title={repositoryStatus.latestCommit}>
+                    Latest: {repositoryStatus.latestCommit}
+                    {repositoryStatus.latestCommitAt ? ` · ${fileTime(repositoryStatus.latestCommitAt)}` : ""}
+                  </span>
+                )}
+              </div>
+              {repositoryStatus && (repositoryStatus.state === "local" || repositoryStatus.state === "error") && (
+                <button type="button" title="Sync with GitHub now" onClick={() => void retryPendingPush()}>
+                  Sync now
+                </button>
               )}
             </div>
-            {repositoryStatus && (repositoryStatus.state === "local" || repositoryStatus.state === "error") && (
-              <button type="button" title="Retry GitHub push" onClick={() => void retryPendingPush()}>
-                Retry
-              </button>
+            {fileSyncItems.length > 0 && (
+              <div className="repository-file-list">
+                {fileSyncItems.map((item) => (
+                  <div className={`repository-file-row ${item.phase}`} key={item.path}>
+                    <div className="repository-file-meta">
+                      <span title={item.name}>{item.name}</span>
+                      <small>{fileSyncLabel(item.phase)}</small>
+                    </div>
+                    <div className="repository-file-track" aria-label={`${item.name}: ${fileSyncLabel(item.phase)}`}>
+                      <span/>
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
-          <button className="open-repository-button" onClick={() => void revealLibrary(libraryFolder)}><FolderIcon size={17}/><span>Open repository folder</span><ChevronIcon size={14}/></button>
-          <button className="folder-path" title={libraryFolder} onClick={() => void selectFolder()}>{libraryFolder}</button>
+          <span className="repository-section-label">Current repository</span>
+          <div
+            className="repository-card-shell"
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget)) setRepositoryMenuOpen(false);
+            }}
+          >
+            <button
+              type="button"
+              className="repository-card-main"
+              title="Open repository folder"
+              onClick={() => {
+                setRepositoryMenuOpen(false);
+                void revealLibrary(libraryFolder);
+              }}
+            >
+              <span className="repository-card-icon"><FolderIcon size={17}/></span>
+              <span className="repository-card-copy">
+                <strong>{repositoryDisplayName(libraryFolder)}</strong>
+                <span title={libraryFolder}>{libraryFolder}</span>
+              </span>
+            </button>
+            <button
+              type="button"
+              className="repository-menu-trigger"
+              title="Repository actions"
+              aria-label="Repository actions"
+              aria-haspopup="menu"
+              aria-expanded={repositoryMenuOpen}
+              onClick={() => setRepositoryMenuOpen((open) => !open)}
+            >
+              <MoreIcon size={17}/>
+            </button>
+            {repositoryMenuOpen && (
+              <div className="repository-menu" role="menu">
+                <button type="button" role="menuitem" onClick={() => void copyRepositoryPath()}>
+                  <CopyIcon size={14}/> Copy path
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setRepositoryMenuOpen(false);
+                    void selectFolder();
+                  }}
+                >
+                  <ChevronIcon size={14}/> Switch repository
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </aside>
 
       <section className="workspace-area">
         {activeCanvas ? (
-          <>
-            <div className="canvas-context-bar">
-              <div>
-                <button className="canvas-emoji-button" title="Choose canvas emoji" onClick={() => setEmojiPickerOpen((value) => !value)}>
-                  {activeCanvas.document.emoji || "🗂️"}
-                </button>
-                <strong>{activeCanvas.document.name}</strong>
-                <span className={activeCanvas.saving || activeCanvas.dirty ? "save-label unsaved" : "save-label saved"}>
-                  {activeCanvas.saving ? "Saving…" : activeCanvas.dirty ? "Unsaved changes" : "Saved"}
-                </span>
-              </div>
-            </div>
-            {emojiPickerOpen && (
-              <div className="emoji-picker-popover">
-                <div className="emoji-options">
-                  {CANVAS_EMOJIS.map((emoji) => (
-                    <button type="button" key={emoji} className={activeCanvas.document.emoji === emoji ? "active" : ""} onClick={() => applyCanvasEmoji(emoji)}>{emoji}</button>
-                  ))}
-                </div>
-                <form onSubmit={(event) => { event.preventDefault(); applyCanvasEmoji(customEmoji); }}>
-                  <input
-                    value={customEmoji}
-                    onChange={(event) => setCustomEmoji(firstGrapheme(event.currentTarget.value))}
-                    placeholder="Custom emoji"
-                    aria-label="Custom emoji"
-                  />
-                  <button type="submit" disabled={!customEmoji.trim()}>Use</button>
-                </form>
-              </div>
-            )}
-            <CanvasWorkspace
-              document={activeCanvas.document}
-              onChange={updateActiveDocument}
-              tool={tool}
-              onToolChange={setTool}
-              color={color}
-              onColorChange={setColor}
-              randomColors={randomColors}
-              onRandomColorsChange={setRandomColors}
-              search={search}
-            />
-          </>
+          <CanvasWorkspace
+            canvasPath={activeCanvas.path}
+            document={activeCanvas.document}
+            onChange={updateActiveDocument}
+            tool={tool}
+            onToolChange={setTool}
+            color={color}
+            onColorChange={setColor}
+            randomColors={randomColors}
+            onRandomColorsChange={setRandomColors}
+            search={search}
+          />
         ) : (
           <div className="no-canvas-view">
             <div className="no-canvas-art"><GridIcon size={36}/></div>
@@ -892,15 +1196,32 @@ export default function App() {
       </section>
 
       {newCanvasOpen && (
-        <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setNewCanvasOpen(false); }}>
-          <form className="small-dialog" onSubmit={(event) => { event.preventDefault(); void addCanvas(); }}>
-            <span className="dialog-icon"><GridIcon/></span>
-            <h2>New canvas</h2>
-            <p>Give this canvas folder a name.</p>
-            <input autoFocus value={newCanvasName} onChange={(event) => setNewCanvasName(event.currentTarget.value)} placeholder="Canvas name" maxLength={100}/>
-            <div className="dialog-actions"><button type="button" onClick={() => setNewCanvasOpen(false)}>Cancel</button><button type="submit" className="primary-action compact">Create canvas</button></div>
-          </form>
-        </div>
+        <CanvasDetailsDialog
+          mode="new"
+          icon={<GridIcon/>}
+          name={newCanvasName}
+          emoji={newCanvasEmoji}
+          submitting={newCanvasSubmitting}
+          onNameChange={setNewCanvasName}
+          onEmojiChange={setNewCanvasEmoji}
+          onCancel={closeNewCanvasDialog}
+          onSubmit={() => void addCanvas()}
+        />
+      )}
+
+      {renamingFile && (
+        <CanvasDetailsDialog
+          mode="edit"
+          icon={<EditIcon/>}
+          name={renameCanvasName}
+          emoji={renameCanvasEmoji}
+          submitting={renameSubmitting}
+          inputRef={renameInputRef}
+          onNameChange={setRenameCanvasName}
+          onEmojiChange={setRenameCanvasEmoji}
+          onCancel={closeRenameDialog}
+          onSubmit={() => void handleRename()}
+        />
       )}
 
       {error && <div className="error-toast"><span>{error}</span><button onClick={() => setError(null)}><XIcon size={16}/></button></div>}

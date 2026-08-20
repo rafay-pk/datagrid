@@ -6,6 +6,7 @@ import { CARD_COLORS, createEmptyDocument, createId } from "./types";
 
 const isTauri = "__TAURI_INTERNALS__" in window;
 const MOCK_FOLDER = "Datagrid Demo Library";
+const MOCK_ASSETS_KEY = "datagrid-mock-assets";
 
 export interface GitEnvironment {
   available: boolean;
@@ -33,6 +34,10 @@ export interface RepositoryStatus {
   behind: number;
   latestCommit?: string;
   latestCommitAt?: string;
+}
+
+export interface ImportedCanvasImage {
+  assetPath: string;
 }
 
 const MOCK_REPOSITORY_STATUS: RepositoryStatus = {
@@ -124,6 +129,18 @@ function saveMockDocuments(documents: Record<string, CanvasDocument>): void {
   localStorage.setItem("datagrid-mock-documents", JSON.stringify(documents));
 }
 
+function mockAssets(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(MOCK_ASSETS_KEY) ?? "{}") as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+function mockAssetKey(canvasPath: string, assetPath: string): string {
+  return `${canvasPath}::${assetPath}`;
+}
+
 export async function chooseLibraryFolder(): Promise<string | null> {
   if (!isTauri) return MOCK_FOLDER;
   const selected = await open({ directory: true, multiple: false, title: "Choose a GitHub repository folder" });
@@ -192,9 +209,32 @@ export async function saveCanvas(path: string, document: CanvasDocument): Promis
   return { commitMessage: `Updated ${document.name}`, status: MOCK_REPOSITORY_STATUS };
 }
 
-export async function createCanvas(folder: string, name: string): Promise<CanvasFile> {
-  if (isTauri) return invoke("create_canvas", { folder, name });
+export async function importCanvasImage(
+  path: string,
+  cardId: string,
+  fileName: string,
+  dataUrl: string,
+): Promise<ImportedCanvasImage> {
+  if (isTauri) return invoke("import_canvas_image", { path, cardId, fileName, dataUrl });
+  const extension = fileName.includes(".") ? "" : ".png";
+  const assetPath = `images/${cardId}-${fileName}${extension}`;
+  const assets = mockAssets();
+  assets[mockAssetKey(path, assetPath)] = dataUrl;
+  localStorage.setItem(MOCK_ASSETS_KEY, JSON.stringify(assets));
+  return { assetPath };
+}
+
+export async function readCanvasAssetDataUrl(path: string, assetPath: string, mimeType?: string): Promise<string> {
+  if (isTauri) return invoke("read_canvas_asset_data_url", { path, assetPath, mimeType });
+  const dataUrl = mockAssets()[mockAssetKey(path, assetPath)];
+  if (!dataUrl) throw new Error("Canvas image asset was not found.");
+  return dataUrl;
+}
+
+export async function createCanvas(folder: string, name: string, emoji = "🗂️"): Promise<CanvasFile> {
+  if (isTauri) return invoke("create_canvas", { folder, name, emoji });
   const document = createEmptyDocument(name);
+  document.emoji = emoji;
   const path = `${folder}\\canvases\\${name}`;
   const documents = mockDocuments();
   documents[path] = document;
@@ -213,6 +253,13 @@ export async function renameCanvas(path: string, name: string): Promise<CanvasFi
   document.updatedAt = new Date().toISOString();
   documents[nextPath] = document;
   saveMockDocuments(documents);
+  const assets = mockAssets();
+  for (const [key, value] of Object.entries(assets)) {
+    if (!key.startsWith(`${path}::`)) continue;
+    assets[`${nextPath}::${key.slice(path.length + 2)}`] = value;
+    delete assets[key];
+  }
+  localStorage.setItem(MOCK_ASSETS_KEY, JSON.stringify(assets));
   return { path: nextPath, name, modifiedAt: document.updatedAt, size: 0, emoji: document.emoji };
 }
 
@@ -225,6 +272,11 @@ export async function duplicateCanvas(path: string): Promise<CanvasFile> {
   const nextPath = `${MOCK_FOLDER}\\canvases\\${source.name}`;
   documents[nextPath] = source;
   saveMockDocuments(documents);
+  const assets = mockAssets();
+  for (const [key, value] of Object.entries(assets)) {
+    if (key.startsWith(`${path}::`)) assets[`${nextPath}::${key.slice(path.length + 2)}`] = value;
+  }
+  localStorage.setItem(MOCK_ASSETS_KEY, JSON.stringify(assets));
   return { path: nextPath, name: source.name, modifiedAt: source.updatedAt, size: 0, emoji: source.emoji };
 }
 
@@ -233,6 +285,11 @@ export async function deleteCanvas(path: string): Promise<SaveResult> {
   const documents = mockDocuments();
   delete documents[path];
   saveMockDocuments(documents);
+  const assets = mockAssets();
+  for (const key of Object.keys(assets)) {
+    if (key.startsWith(`${path}::`)) delete assets[key];
+  }
+  localStorage.setItem(MOCK_ASSETS_KEY, JSON.stringify(assets));
   return { commitMessage: "Removed Canvas", status: MOCK_REPOSITORY_STATUS };
 }
 

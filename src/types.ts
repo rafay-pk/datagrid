@@ -47,7 +47,8 @@ export interface CodeCard extends CardBase {
 export interface ImageCard extends CardBase {
   type: "image";
   label?: string;
-  dataUrl: string;
+  assetPath?: string;
+  dataUrl?: string;
   mimeType: string;
   fileName: string;
   naturalWidth: number;
@@ -127,6 +128,7 @@ export interface SessionState {
   uiScale: number;
   sidebarCollapsed: boolean;
   randomColors: boolean;
+  showTransparencyGrid: boolean;
 }
 
 export const CARD_COLORS = [
