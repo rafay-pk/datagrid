@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, type CSSProperties } from "react";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
 import cpp from "highlight.js/lib/languages/cpp";
@@ -80,6 +80,7 @@ export function CodeEditor({
 }: CodeEditorProps) {
   const highlightRef = useRef<HTMLElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
+  const lineNumbersRef = useRef<HTMLDivElement>(null);
   const measureFrameRef = useRef<number | null>(null);
   const onMeasureRef = useRef(onMeasure);
   onMeasureRef.current = onMeasure;
@@ -92,6 +93,11 @@ export function CodeEditor({
     return { html: hljs.highlight(code, { language: selected }).value, detected: selected };
   }, [code, language]);
   const detectedLabel = LANGUAGE_OPTIONS.find(([value]) => value === highlighted.detected)?.[1] ?? highlighted.detected;
+  const lineCount = useMemo(() => code.split(/\r?\n/).length, [code]);
+  const lineNumbers = useMemo(() => Array.from({ length: lineCount }, (_, index) => index + 1).join("\n"), [lineCount]);
+  const editorStyle = {
+    "--code-gutter-width": `${Math.max(2, String(lineCount).length) + 1.7}ch`,
+  } as CSSProperties;
 
   const measure = () => {
     const editor = editorRef.current;
@@ -153,8 +159,9 @@ export function CodeEditor({
         </select>
         <span className="card-header-drag-region" aria-hidden="true" />
       </div>
-      <div className="code-editor-wrap">
+      <div className="code-editor-wrap" style={editorStyle}>
         <pre aria-hidden="true"><code ref={highlightRef} className="hljs" dangerouslySetInnerHTML={{ __html: `${highlighted.html}\n` }}/></pre>
+        <div ref={lineNumbersRef} className="code-line-numbers" aria-hidden="true">{lineNumbers}</div>
         <textarea
           ref={editorRef}
           value={code}
@@ -171,6 +178,7 @@ export function CodeEditor({
             if (!pre) return;
             pre.scrollTop = event.currentTarget.scrollTop;
             pre.scrollLeft = event.currentTarget.scrollLeft;
+            if (lineNumbersRef.current) lineNumbersRef.current.scrollTop = event.currentTarget.scrollTop;
           }}
           onPointerDown={(event) => {
             if (event.button === 0) event.stopPropagation();

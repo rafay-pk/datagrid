@@ -4,11 +4,12 @@ use reqwest::blocking::Client;
 use reqwest::header::CONTENT_TYPE;
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::fs;
+use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::Mutex;
+use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url::Url;
 use uuid::Uuid;
@@ -16,7 +17,35 @@ use uuid::Uuid;
 const CANVASES_FOLDER: &str = "canvases";
 const METADATA_FILE: &str = ".datagrid.json";
 const MARKDOWN_FILE: &str = "canvas.md";
+const WELCOME_TEMPLATE_FILES: &[(&str, &[u8])] = &[
+    ("canvas.md", include_bytes!("../templates/Welcome/canvas.md")),
+    (
+        "images/image-b2d1eb99-2137-42d7-99a2-575a43576d49-image.png",
+        include_bytes!("../templates/Welcome/images/image-b2d1eb99-2137-42d7-99a2-575a43576d49-image.png"),
+    ),
+    (
+        "images/image-d812a4ba-6bdf-445a-80b2-55d83096ea48-image.png",
+        include_bytes!("../templates/Welcome/images/image-d812a4ba-6bdf-445a-80b2-55d83096ea48-image.png"),
+    ),
+    (
+        "images/image-f6853174-ce12-4fe9-938b-a9bc8ab35d86-image.png",
+        include_bytes!("../templates/Welcome/images/image-f6853174-ce12-4fe9-938b-a9bc8ab35d86-image.png"),
+    ),
+    (
+        "images/link-72425495-9a86-412d-b230-b2906e96f24f-favicon.ico",
+        include_bytes!("../templates/Welcome/images/link-72425495-9a86-412d-b230-b2906e96f24f-favicon.ico"),
+    ),
+    (
+        "images/link-72425495-9a86-412d-b230-b2906e96f24f-preview.png",
+        include_bytes!("../templates/Welcome/images/link-72425495-9a86-412d-b230-b2906e96f24f-preview.png"),
+    ),
+    (
+        "spreadsheets/sheet-b641b382-1971-46c2-816f-b0fdf1fd3cce.csv",
+        include_bytes!("../templates/Welcome/spreadsheets/sheet-b641b382-1971-46c2-816f-b0fdf1fd3cce.csv"),
+    ),
+];
 static GIT_LOCK: Mutex<()> = Mutex::new(());
+static STORAGE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -192,6 +221,38 @@ fn csv_escape(value: &str) -> String {
     }
 }
 
+fn retry_transient_io<T, F>(context: &str, mut operation: F) -> Result<T, String>
+where
+    F: FnMut() -> io::Result<T>,
+{
+    let delays = [0, 20, 50, 100, 200, 400];
+    for (index, delay) in delays.iter().copied().enumerate() {
+        if delay > 0 {
+            thread::sleep(Duration::from_millis(delay));
+        }
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if index + 1 < delays.len()
+                    && matches!(error.kind(), io::ErrorKind::PermissionDenied | io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted) => {}
+            Err(error) => return Err(format!("{context}: {error}")),
+        }
+    }
+    unreachable!()
+}
+
+fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), String> {
+    let parent = path.parent().ok_or("File path has no parent folder.")?;
+    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let temp = parent.join(format!(".datagrid-write-{}", Uuid::new_v4()));
+    fs::write(&temp, contents).map_err(|error| format!("Could not write {}: {error}", temp.display()))?;
+    let result = retry_transient_io(&format!("Could not replace {}", path.display()), || fs::rename(&temp, path));
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
+}
+
 fn write_csv(path: &Path, cells: &[Value]) -> Result<(), String> {
     let contents = cells
         .iter()
@@ -208,7 +269,7 @@ fn write_csv(path: &Path, cells: &[Value]) -> Result<(), String> {
         })
         .collect::<Vec<_>>()
         .join("\r\n");
-    fs::write(path, format!("{contents}\r\n")).map_err(|error| error.to_string())
+    write_atomic(path, format!("{contents}\r\n").as_bytes())
 }
 
 fn parse_csv(contents: &str) -> Vec<Vec<String>> {
@@ -317,10 +378,8 @@ fn markdown_for_document(document: &Value, cards: &[Value]) -> String {
 fn save_document(path: &Path, document: &Value) -> Result<(), String> {
     let parent = path.parent().ok_or("Canvas path has no parent folder.")?;
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    let temp = parent.join(format!(".datagrid-tmp-{}", Uuid::new_v4()));
-    let backup = parent.join(format!(".datagrid-backup-{}", Uuid::new_v4()));
-    fs::create_dir_all(temp.join("images")).map_err(|error| error.to_string())?;
-    fs::create_dir_all(temp.join("spreadsheets")).map_err(|error| error.to_string())?;
+    fs::create_dir_all(path.join("images")).map_err(|error| error.to_string())?;
+    fs::create_dir_all(path.join("spreadsheets")).map_err(|error| error.to_string())?;
 
     let mut stored_document = document.clone();
     let cards = stored_document
@@ -333,22 +392,29 @@ fn save_document(path: &Path, document: &Value) -> Result<(), String> {
         let id = sanitize_asset_name(card.get("id").and_then(Value::as_str).unwrap_or("card"));
         match card_type.as_str() {
             "image" => {
-                let file_name = sanitize_asset_name(
-                    card.get("fileName").and_then(Value::as_str).unwrap_or("image"),
-                );
-                let data_url = card.get("dataUrl").and_then(Value::as_str).unwrap_or("");
-                let (mime, bytes) = data_url_parts(data_url)
-                    .ok_or_else(|| format!("Image card {id} does not contain valid image data."))?;
-                let file_name = if Path::new(&file_name).extension().is_some() {
-                    file_name
+                if let Some(relative) = card.get("assetPath").and_then(Value::as_str) {
+                    let asset = canvas_asset_path(path, relative)?;
+                    if !asset.is_file() {
+                        return Err(format!("Image asset is missing: {}", asset.display()));
+                    }
                 } else {
-                    format!("{file_name}.{}", extension_for_mime(mime))
-                };
-                let relative = format!("images/{id}-{file_name}");
-                fs::write(temp.join(&relative), bytes).map_err(|error| error.to_string())?;
-                if let Some(object) = card.as_object_mut() {
-                    object.remove("dataUrl");
-                    object.insert("assetPath".into(), Value::String(relative));
+                    let file_name = sanitize_asset_name(
+                        card.get("fileName").and_then(Value::as_str).unwrap_or("image"),
+                    );
+                    let data_url = card.get("dataUrl").and_then(Value::as_str).unwrap_or("");
+                    let (mime, bytes) = data_url_parts(data_url)
+                        .ok_or_else(|| format!("Image card {id} does not contain valid image data."))?;
+                    let file_name = if Path::new(&file_name).extension().is_some() {
+                        file_name
+                    } else {
+                        format!("{file_name}.{}", extension_for_mime(mime))
+                    };
+                    let relative = format!("images/{id}-{file_name}");
+                    write_atomic(&path.join(&relative), &bytes)?;
+                    if let Some(object) = card.as_object_mut() {
+                        object.remove("dataUrl");
+                        object.insert("assetPath".into(), Value::String(relative));
+                    }
                 }
             }
             "spreadsheet" => {
@@ -358,7 +424,7 @@ fn save_document(path: &Path, document: &Value) -> Result<(), String> {
                     .and_then(Value::as_array)
                     .cloned()
                     .unwrap_or_default();
-                write_csv(&temp.join(&relative), &cells)?;
+                write_csv(&path.join(&relative), &cells)?;
                 if let Some(object) = card.as_object_mut() {
                     object.remove("cells");
                     object.insert("csvPath".into(), Value::String(relative));
@@ -375,7 +441,7 @@ fn save_document(path: &Path, document: &Value) -> Result<(), String> {
                         };
                         if let Some((mime, bytes)) = data_url_parts(&data_url) {
                             let relative = format!("images/{id}-{suffix}.{}", extension_for_mime(mime));
-                            fs::write(temp.join(&relative), bytes).map_err(|error| error.to_string())?;
+                            write_atomic(&path.join(&relative), &bytes)?;
                             preview.insert(path_key.into(), Value::String(relative));
                         }
                     }
@@ -393,25 +459,9 @@ fn save_document(path: &Path, document: &Value) -> Result<(), String> {
         )
     });
     let markdown = markdown_for_document(&stored_document, &markdown_cards);
-    fs::write(temp.join(MARKDOWN_FILE), markdown).map_err(|error| error.to_string())?;
-    fs::write(
-        temp.join(METADATA_FILE),
-        serde_json::to_string_pretty(&stored_document).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
-
-    if path.exists() {
-        fs::rename(path, &backup).map_err(|error| error.to_string())?;
-    }
-    if let Err(error) = fs::rename(&temp, path) {
-        if backup.exists() {
-            let _ = fs::rename(&backup, path);
-        }
-        return Err(error.to_string());
-    }
-    if backup.exists() {
-        fs::remove_dir_all(backup).map_err(|error| error.to_string())?;
-    }
+    write_atomic(&path.join(MARKDOWN_FILE), markdown.as_bytes())?;
+    let metadata = serde_json::to_vec_pretty(&stored_document).map_err(|error| error.to_string())?;
+    write_atomic(&path.join(METADATA_FILE), &metadata)?;
     Ok(())
 }
 
@@ -452,17 +502,10 @@ fn read_document(path: &Path) -> Result<Value, String> {
     for card in cards {
         match card.get("type").and_then(Value::as_str).unwrap_or("") {
             "image" => {
-                let relative = card
+                card
                     .get("assetPath")
                     .and_then(Value::as_str)
-                    .ok_or("Image card has no asset path.")?
-                    .to_string();
-                let mime = card.get("mimeType").and_then(Value::as_str);
-                let data_url = read_asset_data_url(path, &relative, mime)?;
-                if let Some(object) = card.as_object_mut() {
-                    object.remove("assetPath");
-                    object.insert("dataUrl".into(), Value::String(data_url));
-                }
+                    .ok_or("Image card has no asset path.")?;
             }
             "spreadsheet" => {
                 let relative = card
@@ -571,7 +614,12 @@ fn ensure_local_git_excludes(repository: &Path) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     let mut contents = fs::read_to_string(&exclude_path).unwrap_or_default();
-    for pattern in ["/.datagrid-trash/", "/canvases/.datagrid-tmp-*", "/canvases/.datagrid-backup-*"] {
+    for pattern in [
+        "/.datagrid-trash/",
+        "/canvases/.datagrid-tmp-*",
+        "/canvases/.datagrid-backup-*",
+        "/canvases/**/.datagrid-write-*",
+    ] {
         if !contents.lines().any(|line| line.trim() == pattern) {
             if !contents.is_empty() && !contents.ends_with('\n') {
                 contents.push('\n');
@@ -593,6 +641,9 @@ fn sync_repository_blocking(repository: &Path) -> Result<RepositoryStatus, Strin
     let _git_guard = GIT_LOCK
         .lock()
         .map_err(|_| "Git synchronization lock is unavailable.".to_string())?;
+    let _storage_guard = STORAGE_LOCK
+        .lock()
+        .map_err(|_| "Canvas storage lock is unavailable.".to_string())?;
     validate_repository(repository)?;
     ensure_local_git_excludes(repository)?;
     commit_paths(
@@ -627,12 +678,6 @@ fn repository_for_canvas(path: &Path) -> Result<PathBuf, String> {
     let repository = canvases.parent().ok_or("Canvas is not inside a repository.")?;
     validate_repository(repository)?;
     Ok(repository.to_path_buf())
-}
-
-fn relative_path<'a>(repository: &'a Path, path: &'a Path) -> Result<String, String> {
-    path.strip_prefix(repository)
-        .map(|value| value.to_string_lossy().replace('\\', "/"))
-        .map_err(|_| "Canvas is outside the repository.".to_string())
 }
 
 fn push_repository(repository: &Path) -> Result<(), String> {
@@ -718,22 +763,6 @@ fn repository_status_blocking(repository: &Path) -> Result<RepositoryStatus, Str
     })
 }
 
-fn unavailable_repository_status(message: &str) -> RepositoryStatus {
-    RepositoryStatus {
-        state: "error".to_string(),
-        message: message.to_string(),
-        ahead: 0,
-        behind: 0,
-        latest_commit: None,
-        latest_commit_at: None,
-    }
-}
-
-fn current_repository_status(repository: &Path) -> RepositoryStatus {
-    repository_status_blocking(repository)
-        .unwrap_or_else(|error| unavailable_repository_status(&format!("Git status unavailable: {error}")))
-}
-
 fn git_status_owned(repository: &Path, arguments: &[String]) -> Result<Output, String> {
     Command::new("git")
         .args(arguments)
@@ -774,126 +803,10 @@ fn commit_paths(repository: &Path, pathspecs: &[&str], title: &str, body: &str) 
     Ok(true)
 }
 
-fn words(value: &str) -> String {
-    let html = Regex::new(r"(?s)<[^>]+>").unwrap().replace_all(value, " ");
-    let compact = html.split_whitespace().take(8).collect::<Vec<_>>().join(" ");
-    if compact.is_empty() { "Untitled card".to_string() } else { compact }
-}
-
-fn card_excerpt(card: &Value) -> String {
-    match card.get("type").and_then(Value::as_str).unwrap_or("") {
-        "text" => words(card.get("html").and_then(Value::as_str).unwrap_or("")),
-        "code" => words(card.get("code").and_then(Value::as_str).unwrap_or("")),
-        "image" => card
-            .get("label")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .or_else(|| card.get("fileName").and_then(Value::as_str))
-            .unwrap_or("Image")
-            .to_string(),
-        "spreadsheet" => "Spreadsheet".to_string(),
-        "link" => card
-            .get("preview")
-            .and_then(|preview| preview.get("title"))
-            .and_then(Value::as_str)
-            .or_else(|| card.get("url").and_then(Value::as_str))
-            .unwrap_or("Link")
-            .to_string(),
-        _ => "Card".to_string(),
-    }
-}
-
-fn card_map(document: &Value) -> HashMap<String, Value> {
-    document
-        .get("cards")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|card| card.get("id").and_then(Value::as_str).map(|id| (id.to_string(), card.clone())))
-        .collect()
-}
-
-fn change_description(previous: Option<&Value>, next: &Value) -> (String, String) {
-    let before = previous.map(card_map).unwrap_or_default();
-    let after = card_map(next);
-    let added = after
-        .iter()
-        .filter(|(id, _)| !before.contains_key(*id))
-        .map(|(_, card)| card_excerpt(card))
-        .collect::<Vec<_>>();
-    let removed = before
-        .iter()
-        .filter(|(id, _)| !after.contains_key(*id))
-        .map(|(_, card)| card_excerpt(card))
-        .collect::<Vec<_>>();
-    let edited = after
-        .iter()
-        .filter(|(id, card)| before.get(*id).map(|old| old != *card).unwrap_or(false))
-        .map(|(_, card)| card_excerpt(card))
-        .collect::<Vec<_>>();
-    let name = next.get("name").and_then(Value::as_str).unwrap_or("canvas");
-    let groups = [
-        ("Edited", &edited),
-        ("Added", &added),
-        ("Removed", &removed),
-    ]
-    .into_iter()
-    .filter(|(_, cards)| !cards.is_empty())
-    .collect::<Vec<_>>();
-    if groups.is_empty() {
-        return (format!("Updated {name}"), String::new());
-    }
-    let title = if groups.len() == 1 {
-        let (verb, cards) = groups[0];
-        format!("{verb} {} Card{} in {name}", cards.len(), if cards.len() == 1 { "" } else { "s" })
-    } else {
-        let count = added.len() + edited.len() + removed.len();
-        format!("Updated {count} Cards in {name}")
-    };
-    let body = groups
-        .into_iter()
-        .map(|(verb, cards)| {
-            let details = cards.iter().take(3).cloned().collect::<Vec<_>>().join("; ");
-            format!("{verb} {} Card{}: {details}", cards.len(), if cards.len() == 1 { "" } else { "s" })
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    (title, body)
-}
-
-fn finish_git_change(repository: &Path, pathspecs: &[&str], title: &str, body: &str) -> SaveResult {
-    let Ok(_git_guard) = GIT_LOCK.lock() else {
-        return SaveResult {
-            commit_message: None,
-            warning: Some("Saved locally, but the Git synchronization lock is unavailable.".to_string()),
-            status: current_repository_status(repository),
-        };
-    };
-    match commit_paths(repository, pathspecs, title, body) {
-        Ok(committed) => match push_repository(repository) {
-            Ok(()) => SaveResult {
-                commit_message: committed.then(|| title.to_string()),
-                warning: None,
-                status: current_repository_status(repository),
-            },
-            Err(error) => SaveResult {
-                commit_message: committed.then(|| title.to_string()),
-                warning: Some(format!("Saved and committed locally, but Git could not push: {error}")),
-                status: current_repository_status(repository),
-            },
-        },
-        Err(error) => SaveResult {
-            commit_message: None,
-            warning: Some(format!("Saved locally, but Git could not create a commit: {error}")),
-            status: current_repository_status(repository),
-        },
-    }
-}
-
-fn background_sync_status() -> RepositoryStatus {
+fn queued_sync_status() -> RepositoryStatus {
     RepositoryStatus {
-        state: "syncing".to_string(),
-        message: "Saved locally — syncing with GitHub…".to_string(),
+        state: "local".to_string(),
+        message: "Saved locally — GitHub sync is queued".to_string(),
         ahead: 0,
         behind: 0,
         latest_commit: None,
@@ -901,11 +814,58 @@ fn background_sync_status() -> RepositoryStatus {
     }
 }
 
-fn queue_git_change(repository: PathBuf, pathspecs: Vec<String>, title: String, body: String) {
-    tauri::async_runtime::spawn_blocking(move || {
-        let paths = pathspecs.iter().map(String::as_str).collect::<Vec<_>>();
-        let _ = finish_git_change(&repository, &paths, &title, &body);
-    });
+fn copy_asset_folder(source_canvas: &Path, destination_canvas: &Path, folder_name: &str) -> Result<(), String> {
+    let source = source_canvas.join(folder_name);
+    if !source.is_dir() {
+        return Ok(());
+    }
+    let destination = destination_canvas.join(folder_name);
+    fs::create_dir_all(&destination).map_err(|error| error.to_string())?;
+    for entry in fs::read_dir(&source).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        if !entry.path().is_file() {
+            continue;
+        }
+        let bytes = retry_transient_io(&format!("Could not read {}", entry.path().display()), || fs::read(entry.path()))?;
+        write_atomic(&destination.join(entry.file_name()), &bytes)?;
+    }
+    Ok(())
+}
+
+fn seed_welcome_canvas(repository: &Path) -> Result<(), String> {
+    let canvases = repository.join(CANVASES_FOLDER);
+    fs::create_dir_all(&canvases).map_err(|error| error.to_string())?;
+    let already_has_canvas = fs::read_dir(&canvases)
+        .map_err(|error| error.to_string())?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .any(|path| path.is_dir() && path.join(METADATA_FILE).is_file());
+    if already_has_canvas {
+        return Ok(());
+    }
+
+    let welcome = canvases.join("Welcome");
+    for (relative, contents) in WELCOME_TEMPLATE_FILES {
+        write_atomic(&welcome.join(relative), contents)?;
+    }
+
+    let mut metadata: Value = serde_json::from_str(include_str!("../templates/Welcome/.datagrid.json"))
+        .map_err(|error| format!("The built-in Welcome canvas is invalid: {error}"))?;
+    let now = timestamp(SystemTime::now());
+    let document = metadata
+        .as_object_mut()
+        .ok_or("The built-in Welcome canvas metadata is not an object.")?;
+    document.insert("id".into(), Value::String(format!("canvas-{}", Uuid::new_v4())));
+    document.insert("createdAt".into(), Value::String(now.clone()));
+    document.insert("updatedAt".into(), Value::String(now));
+    let metadata = serde_json::to_vec_pretty(&metadata).map_err(|error| error.to_string())?;
+    write_atomic(&welcome.join(METADATA_FILE), &metadata)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportedCanvasImage {
+    asset_path: String,
 }
 
 #[tauri::command]
@@ -923,6 +883,10 @@ fn git_environment() -> GitEnvironment {
 async fn connect_repository(folder: String, remote_url: Option<String>) -> Result<RepositoryConnection, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let repository = PathBuf::from(&folder);
+        let cloning_repository = remote_url
+            .as_ref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
         if remote_url.as_ref().map(|value| value.trim().is_empty()).unwrap_or(true) {
             let probe = git_status(&repository, &["rev-parse", "--show-toplevel"])?;
             if !probe.status.success() {
@@ -966,6 +930,9 @@ async fn connect_repository(folder: String, remote_url: Option<String>) -> Resul
         let remote = validate_repository(&repository)?;
         ensure_local_git_excludes(&repository)?;
         fs::create_dir_all(repository.join(CANVASES_FOLDER)).map_err(|error| error.to_string())?;
+        if cloning_repository {
+            seed_welcome_canvas(&repository)?;
+        }
         Ok(RepositoryConnection {
             folder,
             remote_url: remote,
@@ -987,7 +954,12 @@ async fn sync_repository(folder: String) -> Result<RepositoryStatus, String> {
 
 #[tauri::command]
 async fn repository_status(folder: String) -> Result<RepositoryStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || repository_status_blocking(Path::new(&folder)))
+    tauri::async_runtime::spawn_blocking(move || {
+        let _storage_guard = STORAGE_LOCK
+            .lock()
+            .map_err(|_| "Canvas storage lock is unavailable.".to_string())?;
+        repository_status_blocking(Path::new(&folder))
+    })
         .await
         .map_err(|error| error.to_string())?
 }
@@ -999,13 +971,18 @@ async fn push_pending_commits(folder: String) -> Result<RepositoryStatus, String
         let _git_guard = GIT_LOCK
             .lock()
             .map_err(|_| "Git synchronization lock is unavailable.".to_string())?;
-        validate_repository(&repository)?;
-        commit_paths(
-            &repository,
-            &[CANVASES_FOLDER],
-            "Saved pending Datagrid changes",
-            "Committed canvas changes that were already saved locally.",
-        )?;
+        {
+            let _storage_guard = STORAGE_LOCK
+                .lock()
+                .map_err(|_| "Canvas storage lock is unavailable.".to_string())?;
+            validate_repository(&repository)?;
+            commit_paths(
+                &repository,
+                &[CANVASES_FOLDER],
+                "Saved pending Datagrid changes",
+                "Committed canvas changes that were already saved locally.",
+            )?;
+        }
         run_git(&repository, &["fetch", "origin"])?;
         let fetched_status = repository_status_blocking(&repository)?;
         if fetched_status.behind > 0 {
@@ -1022,8 +999,13 @@ async fn push_pending_commits(folder: String) -> Result<RepositoryStatus, String
 
 #[tauri::command]
 fn list_canvases(folder: String) -> Result<Vec<CanvasFile>, String> {
+    let _storage_guard = STORAGE_LOCK
+        .lock()
+        .map_err(|_| "Canvas storage lock is unavailable.".to_string())?;
     let repository = PathBuf::from(folder);
-    validate_repository(&repository)?;
+    if !repository.is_dir() {
+        return Err("The Datagrid repository folder could not be found.".to_string());
+    }
     let folder = repository.join(CANVASES_FOLDER);
     fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
     let mut files = fs::read_dir(folder)
@@ -1039,30 +1021,79 @@ fn list_canvases(folder: String) -> Result<Vec<CanvasFile>, String> {
 
 #[tauri::command]
 fn load_canvas(path: String) -> Result<Value, String> {
+    let _storage_guard = STORAGE_LOCK
+        .lock()
+        .map_err(|_| "Canvas storage lock is unavailable.".to_string())?;
     read_document(Path::new(&path))
+}
+
+#[tauri::command]
+async fn import_canvas_image(
+    path: String,
+    card_id: String,
+    file_name: String,
+    data_url: String,
+) -> Result<ImportedCanvasImage, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _storage_guard = STORAGE_LOCK
+            .lock()
+            .map_err(|_| "Canvas storage lock is unavailable.".to_string())?;
+        let canvas = PathBuf::from(path);
+        let id = sanitize_asset_name(&card_id);
+        let file_name = sanitize_asset_name(&file_name);
+        let (mime, bytes) = data_url_parts(&data_url)
+            .ok_or("The pasted image does not contain valid image data.")?;
+        let file_name = if Path::new(&file_name).extension().is_some() {
+            file_name
+        } else {
+            format!("{file_name}.{}", extension_for_mime(mime))
+        };
+        let asset_path = format!("images/{id}-{file_name}");
+        write_atomic(&canvas.join(&asset_path), &bytes)?;
+        Ok(ImportedCanvasImage { asset_path })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn read_canvas_asset_data_url(
+    path: String,
+    asset_path: String,
+    mime_type: Option<String>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _storage_guard = STORAGE_LOCK
+            .lock()
+            .map_err(|_| "Canvas storage lock is unavailable.".to_string())?;
+        read_asset_data_url(Path::new(&path), &asset_path, mime_type.as_deref())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
 async fn save_canvas(path: String, document: Value) -> Result<SaveResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let _storage_guard = STORAGE_LOCK
+            .lock()
+            .map_err(|_| "Canvas storage lock is unavailable.".to_string())?;
         let path = PathBuf::from(path);
-        let previous = path.exists().then(|| read_document(&path)).transpose()?;
-        let repository = repository_for_canvas(&path)?;
-        let pathspec = relative_path(&repository, &path)?;
-        let (title, body) = change_description(previous.as_ref(), &document);
         save_document(&path, &document)?;
-        queue_git_change(repository, vec![pathspec], title, body);
         Ok(SaveResult {
             commit_message: None,
             warning: None,
-            status: background_sync_status(),
+            status: queued_sync_status(),
         })
     })
     .await
     .map_err(|error| error.to_string())?
 }
 
-fn create_canvas_blocking(folder: String, name: String) -> Result<CanvasFile, String> {
+fn create_canvas_blocking(folder: String, name: String, emoji: String) -> Result<CanvasFile, String> {
+    let _storage_guard = STORAGE_LOCK
+        .lock()
+        .map_err(|_| "Canvas storage lock is unavailable.".to_string())?;
     let repository = PathBuf::from(folder);
     validate_repository(&repository)?;
     fs::create_dir_all(repository.join(CANVASES_FOLDER)).map_err(|error| error.to_string())?;
@@ -1073,7 +1104,7 @@ fn create_canvas_blocking(folder: String, name: String) -> Result<CanvasFile, St
         "version": 1,
         "id": format!("canvas-{}", Uuid::new_v4()),
         "name": actual_name,
-        "emoji": "🗂️",
+        "emoji": emoji,
         "accent": "#FF4D4D",
         "font": "Figtree Variable",
         "cards": [],
@@ -1082,41 +1113,32 @@ fn create_canvas_blocking(folder: String, name: String) -> Result<CanvasFile, St
         "updatedAt": now
     });
     save_document(&path, &document)?;
-    let pathspec = relative_path(&repository, &path)?;
-    let title = format!("Added Canvas: {actual_name}");
-    queue_git_change(
-        repository,
-        vec![pathspec],
-        title,
-        "Created a new Datagrid canvas.".to_string(),
-    );
     canvas_file(&path)
 }
 
 fn rename_canvas_blocking(path: String, name: String) -> Result<CanvasFile, String> {
+    let _storage_guard = STORAGE_LOCK
+        .lock()
+        .map_err(|_| "Canvas storage lock is unavailable.".to_string())?;
     let old_path = PathBuf::from(path);
     let repository = repository_for_canvas(&old_path)?;
-    let old_pathspec = relative_path(&repository, &old_path)?;
     let new_path = unique_canvas_path(&repository, &name);
     let mut document = read_document(&old_path)?;
     let actual_name = new_path.file_name().and_then(|value| value.to_str()).unwrap_or("Untitled canvas");
-    let old_name = document.get("name").and_then(Value::as_str).unwrap_or("Untitled canvas").to_string();
     document["name"] = Value::String(actual_name.to_string());
     document["updatedAt"] = Value::String(timestamp(SystemTime::now()));
-    save_document(&new_path, &document)?;
-    fs::remove_dir_all(&old_path).map_err(|error| error.to_string())?;
-    let new_pathspec = relative_path(&repository, &new_path)?;
-    let title = format!("Renamed Canvas: {old_name} to {actual_name}");
-    queue_git_change(
-        repository,
-        vec![old_pathspec, new_pathspec],
-        title,
-        "Renamed the canvas folder and updated its Markdown title.".to_string(),
-    );
+    retry_transient_io("Could not rename the canvas folder", || fs::rename(&old_path, &new_path))?;
+    if let Err(error) = save_document(&new_path, &document) {
+        let _ = retry_transient_io("Could not restore the previous canvas folder", || fs::rename(&new_path, &old_path));
+        return Err(error);
+    }
     canvas_file(&new_path)
 }
 
 fn duplicate_canvas_blocking(path: String) -> Result<CanvasFile, String> {
+    let _storage_guard = STORAGE_LOCK
+        .lock()
+        .map_err(|_| "Canvas storage lock is unavailable.".to_string())?;
     let source_path = PathBuf::from(path);
     let repository = repository_for_canvas(&source_path)?;
     let mut document = read_document(&source_path)?;
@@ -1126,26 +1148,21 @@ fn duplicate_canvas_blocking(path: String) -> Result<CanvasFile, String> {
     document["id"] = Value::String(format!("canvas-{}", Uuid::new_v4()));
     document["name"] = Value::String(actual_name.to_string());
     document["updatedAt"] = Value::String(timestamp(SystemTime::now()));
-    save_document(&new_path, &document)?;
-    let pathspec = relative_path(&repository, &new_path)?;
-    let title = format!("Added Canvas: {actual_name}");
-    queue_git_change(
-        repository,
-        vec![pathspec],
-        title,
-        "Duplicated an existing Datagrid canvas.".to_string(),
-    );
+    copy_asset_folder(&source_path, &new_path, "images")?;
+    copy_asset_folder(&source_path, &new_path, "spreadsheets")?;
+    if let Err(error) = save_document(&new_path, &document) {
+        let _ = retry_transient_io("Could not clean up the incomplete canvas copy", || fs::remove_dir_all(&new_path));
+        return Err(error);
+    }
     canvas_file(&new_path)
 }
 
 fn delete_canvas_blocking(path: String) -> Result<SaveResult, String> {
+    let _storage_guard = STORAGE_LOCK
+        .lock()
+        .map_err(|_| "Canvas storage lock is unavailable.".to_string())?;
     let source = PathBuf::from(path);
     let repository = repository_for_canvas(&source)?;
-    let name = read_document(&source)
-        .ok()
-        .and_then(|document| document.get("name").and_then(Value::as_str).map(str::to_string))
-        .unwrap_or_else(|| "Untitled canvas".to_string());
-    let pathspec = relative_path(&repository, &source)?;
     let trash = repository.join(".datagrid-trash");
     fs::create_dir_all(&trash).map_err(|error| error.to_string())?;
     let file_name = source.file_name().ok_or("Canvas path has no file name.")?;
@@ -1153,24 +1170,17 @@ fn delete_canvas_blocking(path: String) -> Result<SaveResult, String> {
     if destination.exists() {
         destination = trash.join(format!("{}-{}", timestamp(SystemTime::now()), file_name.to_string_lossy()));
     }
-    fs::rename(&source, destination).map_err(|error| error.to_string())?;
-    let title = format!("Removed Canvas: {name}");
-    queue_git_change(
-        repository,
-        vec![pathspec],
-        title,
-        "Moved the canvas to Datagrid's local recovery folder.".to_string(),
-    );
+    retry_transient_io("Could not move the canvas to the recovery folder", || fs::rename(&source, &destination))?;
     Ok(SaveResult {
         commit_message: None,
         warning: None,
-        status: background_sync_status(),
+        status: queued_sync_status(),
     })
 }
 
 #[tauri::command]
-async fn create_canvas(folder: String, name: String) -> Result<CanvasFile, String> {
-    tauri::async_runtime::spawn_blocking(move || create_canvas_blocking(folder, name))
+async fn create_canvas(folder: String, name: String, emoji: String) -> Result<CanvasFile, String> {
+    tauri::async_runtime::spawn_blocking(move || create_canvas_blocking(folder, name, emoji))
         .await
         .map_err(|error| error.to_string())?
 }
@@ -1337,6 +1347,8 @@ pub fn run() {
             push_pending_commits,
             list_canvases,
             load_canvas,
+            import_canvas_image,
+            read_canvas_asset_data_url,
             save_canvas,
             create_canvas,
             rename_canvas,
@@ -1388,7 +1400,10 @@ mod tests {
 
         save_document(&path, &document).unwrap();
         let reopened = read_document(&path).unwrap();
-        assert_eq!(reopened, document);
+        let image = reopened["cards"][1].as_object().unwrap();
+        assert_eq!(image.get("assetPath").and_then(Value::as_str), Some("images/image-one-pixel.png"));
+        assert!(image.get("dataUrl").is_none());
+        assert_eq!(reopened["cards"][2]["cells"], document["cards"][2]["cells"]);
         assert!(path.join("canvas.md").is_file());
         assert!(path.join("images/image-one-pixel.png").is_file());
         assert!(path.join("spreadsheets/sheet-one.csv").is_file());

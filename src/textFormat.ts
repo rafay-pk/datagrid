@@ -74,6 +74,79 @@ export function plainTextFromBlocks(blocks: TextBlock[]): string {
   return blocks.map((block) => block.runs.map((run) => run.text).join("")).join("\n");
 }
 
+function escapeMarkdownText(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/&/g, "&amp;")
+    .replace(/([`*_[\]<>])/g, "\\$1")
+    .replace(/^([#>])/gm, "\\$1")
+    .replace(/^(\s*)([-+])(?=\s)/gm, "$1\\$2")
+    .replace(/^(\s*)(\d+)\.(?=\s)/gm, "$1$2\\.")
+    .replace(/\r\n?/g, "\n")
+    .replace(/\n/g, "  \n");
+}
+
+function wrapMarkdown(value: string, before: string, after: string): string {
+  const content = value.match(/^(\s*)([\s\S]*?\S)(\s*)$/);
+  return content ? `${content[1]}${before}${content[2]}${after}${content[3]}` : value;
+}
+
+function markdownFromRun(run: TextRun): string {
+  let value = escapeMarkdownText(run.text);
+  if (run.bold) value = wrapMarkdown(value, "**", "**");
+  if (run.italic) value = wrapMarkdown(value, "*", "*");
+  if (run.underline) value = wrapMarkdown(value, "<u>", "</u>");
+  if (run.href) {
+    const destination = run.href.replace(/([\\()])/g, "\\$1");
+    value = wrapMarkdown(value, "[", `](${destination})`);
+  }
+  return value;
+}
+
+function markdownListType(kind: TextBlock["kind"]): "unordered" | "ordered" | null {
+  if (kind === "unordered-item" || kind === "checklist-item") return "unordered";
+  return kind === "ordered-item" ? "ordered" : null;
+}
+
+export function markdownFromTextBlocks(blocks: TextBlock[], title = ""): string {
+  const sections: Array<{ value: string; listType: "unordered" | "ordered" | null }> = [];
+  let orderedIndex = 0;
+  let previousListType: "unordered" | "ordered" | null = null;
+
+  if (title.trim()) {
+    sections.push({ value: `# ${escapeMarkdownText(title.trim())}`, listType: null });
+  }
+
+  for (const block of blocks) {
+    const listType = markdownListType(block.kind);
+    if (listType !== "ordered" || previousListType !== "ordered") orderedIndex = 0;
+    if (listType === "ordered") orderedIndex += 1;
+
+    const content = block.runs.map(markdownFromRun).join("");
+    const indentation = "  ".repeat(Math.max(0, block.level ?? 0));
+    const continuationIndent = listType ? `${indentation}  ` : "";
+    const multilineContent = continuationIndent
+      ? content.replace(/\n/g, `\n${continuationIndent}`)
+      : content;
+    let value: string;
+    if (block.kind === "heading") value = `## ${multilineContent}`;
+    else if (block.kind === "unordered-item") value = `${indentation}- ${multilineContent}`;
+    else if (block.kind === "ordered-item") value = `${indentation}${orderedIndex}. ${multilineContent}`;
+    else if (block.kind === "checklist-item") value = `${indentation}- [${block.checked ? "x" : " "}] ${multilineContent}`;
+    else value = multilineContent;
+
+    sections.push({ value, listType });
+    previousListType = listType;
+  }
+
+  return sections.reduce((markdown, section, index) => {
+    if (index === 0) return section.value;
+    const previous = sections[index - 1];
+    const separator = previous.listType && previous.listType === section.listType ? "\n" : "\n\n";
+    return `${markdown}${separator}${section.value}`;
+  }, "").replace(/(?:\s*\n)+$/, "");
+}
+
 export function trimTrailingEmptyLines(value: string): string {
   return value.replace(/(?:\r?\n[\t ]*)+$/, "");
 }

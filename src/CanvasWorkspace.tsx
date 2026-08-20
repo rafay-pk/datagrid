@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { fetchImageDataUrl, fetchLinkPreview } from "./api";
+import { fetchImageDataUrl, fetchLinkPreview, importCanvasImage, readCanvasAssetDataUrl } from "./api";
 import { averageImageAccent } from "./color";
 import { clampZoom, firstFreePosition, reflowCardGroup, reflowCards } from "./grid";
 import {
@@ -25,7 +25,7 @@ import { TextEditor } from "./TextEditor";
 import { CodeEditor } from "./CodeEditor";
 import { convertClipboardContent } from "./clipboardFormat";
 import type { ClipboardImage } from "./clipboardFormat";
-import { blocksFromHtml, extractTextTitle, looksTabular, normalizeUrl, parseTable, plainTextFromBlocks, trimTrailingEmptyLines } from "./textFormat";
+import { blocksFromHtml, extractTextTitle, looksTabular, markdownFromTextBlocks, normalizeUrl, parseTable, plainTextFromBlocks, trimTrailingEmptyLines } from "./textFormat";
 import {
   CARD_COLORS,
   GRID_GAP,
@@ -44,6 +44,7 @@ import {
 } from "./types";
 
 interface CanvasWorkspaceProps {
+  canvasPath: string;
   document: CanvasDocument;
   onChange: (document: CanvasDocument, recordHistory?: boolean, markDirty?: boolean) => void;
   tool: Tool;
@@ -127,7 +128,32 @@ function CreationToolIcon({ tool }: { tool: Exclude<Tool, "select"> }) {
   return <LinkIcon size={30} />;
 }
 
-type NewImageCard = Omit<ImageCard, "id" | "x" | "y" | "color" | "createdAt">;
+type NewImageCard = Omit<ImageCard, "id" | "x" | "y" | "color" | "createdAt" | "assetPath" | "dataUrl"> & {
+  dataUrl: string;
+};
+
+function CanvasImageAsset({ canvasPath, card }: { canvasPath: string; card: ImageCard }) {
+  const [source, setSource] = useState(card.dataUrl ?? "");
+
+  useEffect(() => {
+    let cancelled = false;
+    if (card.dataUrl) {
+      setSource(card.dataUrl);
+      return;
+    }
+    if (!card.assetPath) {
+      setSource("");
+      return;
+    }
+    setSource("");
+    void readCanvasAssetDataUrl(canvasPath, card.assetPath, card.mimeType)
+      .then((dataUrl) => { if (!cancelled) setSource(dataUrl); })
+      .catch(() => { if (!cancelled) setSource(""); });
+    return () => { cancelled = true; };
+  }, [canvasPath, card.assetPath, card.dataUrl, card.mimeType]);
+
+  return <img className="image-content" src={source} alt={card.label || card.fileName} draggable={false} />;
+}
 
 function imageCardFromDataUrl(dataUrl: string, fileName: string, mimeType: string): Promise<NewImageCard> {
   return new Promise((resolve, reject) => {
@@ -199,6 +225,11 @@ function textCardPlainText(card: TextCard): string {
   return [content.title.trim(), plainTextFromBlocks(content.blocks)].filter(Boolean).join("\n");
 }
 
+function textCardMarkdown(card: TextCard): string {
+  const content = normalizedTextCard(card);
+  return markdownFromTextBlocks(content.blocks, content.title);
+}
+
 function htmlFromPlainText(value: string): string {
   if (!value) return "";
   const escaped = value
@@ -215,6 +246,7 @@ function pastedTextWidth(value: string): number {
 }
 
 export function CanvasWorkspace({
+  canvasPath,
   document,
   onChange,
   tool,
@@ -253,6 +285,8 @@ export function CanvasWorkspace({
   const suppressContextMenuRef = useRef(false);
   const suppressCanvasClickRef = useRef(false);
   const contextMenuTimeoutRef = useRef<number | null>(null);
+  const canvasPasteRef = useRef<(event: ClipboardEvent) => void>(() => undefined);
+  const imageWorkQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     documentRef.current = document;
@@ -465,8 +499,34 @@ export function CanvasWorkspace({
     }
   };
 
-  const addImageFiles = async (
-    files: FileList | File[],
+  const importAndPlaceImage = async (
+    image: NewImageCard,
+    origin: { x: number; y: number },
+    placement?: CreationPlacement,
+  ) => {
+    const id = createId("image");
+    const [imported, averageAccent] = await Promise.all([
+      importCanvasImage(canvasPath, id, image.fileName, image.dataUrl),
+      averageImageAccent(image.dataUrl),
+    ]);
+    const { dataUrl: _dataUrl, ...metadata } = image;
+    return placeCard<ImageCard>({
+      ...metadata,
+      id,
+      assetPath: imported.assetPath,
+      color: averageAccent ?? nextCardColor(),
+      createdAt: new Date().toISOString(),
+    }, origin, placement);
+  };
+
+  const enqueueImageWork = (work: () => Promise<void>): Promise<void> => {
+    const queued = imageWorkQueueRef.current.then(work, work);
+    imageWorkQueueRef.current = queued.catch(() => undefined);
+    return queued;
+  };
+
+  const processImageFiles = async (
+    files: File[],
     origin?: { x: number; y: number },
     placement?: CreationPlacement,
   ) => {
@@ -477,7 +537,6 @@ export function CanvasWorkspace({
     for (const [index, file] of supported.entries()) {
       try {
         const image = await readImage(file);
-        const averageAccent = await averageImageAccent(image.dataUrl);
         const filePlacement = placement ? {
           ...placement,
           rect: {
@@ -485,12 +544,7 @@ export function CanvasWorkspace({
             x: placement.rect.x + index * placement.rect.w,
           },
         } : undefined;
-        placeCard<ImageCard>({
-          ...image,
-          id: createId("image"),
-          color: averageAccent ?? nextCardColor(),
-          createdAt: new Date().toISOString(),
-        }, position, filePlacement);
+        await importAndPlaceImage(image, position, filePlacement);
         position = { x: position.x + (placement?.rect.w ?? image.w), y: position.y };
       } catch (error) {
         setNotice(error instanceof Error ? error.message : "Could not add that image.");
@@ -498,7 +552,16 @@ export function CanvasWorkspace({
     }
   };
 
-  const addPastedImagesAbove = async (card: CanvasCard, files: File[], sources: ClipboardImage[]) => {
+  const addImageFiles = (
+    files: FileList | File[],
+    origin?: { x: number; y: number },
+    placement?: CreationPlacement,
+  ) => {
+    const snapshot = Array.from(files);
+    return enqueueImageWork(() => processImageFiles(snapshot, origin, placement));
+  };
+
+  const processPastedImagesAbove = async (card: CanvasCard, files: File[], sources: ClipboardImage[]) => {
     const fileImages = files.map((file) => () => readImage(file));
     const sourceImages = files.length ? [] : Array.from(new Map(sources.map((image) => [image.src, image])).values()).map(
       (source, index) => async () => {
@@ -512,18 +575,18 @@ export function CanvasWorkspace({
     for (const loadImage of [...fileImages, ...sourceImages]) {
       try {
         const image = await loadImage();
-        const averageAccent = await averageImageAccent(image.dataUrl);
-        placeCard<ImageCard>({
-          ...image,
-          id: createId("image"),
-          color: averageAccent ?? nextCardColor(),
-          createdAt: new Date().toISOString(),
-        }, { x, y: card.y - image.h });
+        await importAndPlaceImage(image, { x, y: card.y - image.h });
         x += image.w;
       } catch (error) {
         setNotice(error instanceof Error ? error.message : "Could not add a pasted image.");
       }
     }
+  };
+
+  const addPastedImagesAbove = (card: CanvasCard, files: File[], sources: ClipboardImage[]) => {
+    const fileSnapshot = [...files];
+    const sourceSnapshot = [...sources];
+    return enqueueImageWork(() => processPastedImagesAbove(card, fileSnapshot, sourceSnapshot));
   };
 
   const duplicateCard = (card: CanvasCard) => {
@@ -592,7 +655,7 @@ export function CanvasWorkspace({
   const copyCardToClipboard = async (card: CanvasCard) => {
     try {
       if (card.type === "text") {
-        await navigator.clipboard.writeText(textCardPlainText(card));
+        await navigator.clipboard.writeText(textCardMarkdown(card));
       } else if (card.type === "code") {
         await navigator.clipboard.writeText(card.code);
       } else if (card.type === "link") {
@@ -600,7 +663,11 @@ export function CanvasWorkspace({
       } else if (card.type === "spreadsheet") {
         await navigator.clipboard.writeText(spreadsheetToCsv(card));
       } else if (card.type === "image") {
-        const blob = await imageDataUrlToOriginalBlob(card.dataUrl, card.mimeType);
+        const dataUrl = card.dataUrl ?? (card.assetPath
+          ? await readCanvasAssetDataUrl(canvasPath, card.assetPath, card.mimeType)
+          : "");
+        if (!dataUrl) throw new Error("The image asset is unavailable.");
+        const blob = await imageDataUrlToOriginalBlob(dataUrl, card.mimeType);
         await navigator.clipboard.write([new ClipboardItem({ [card.mimeType]: blob })]);
       }
       setCopiedCardId(card.id);
@@ -619,6 +686,7 @@ export function CanvasWorkspace({
   const startCardInteraction = (event: React.PointerEvent, card: CanvasCard, type: "drag" | "resize") => {
     event.preventDefault();
     event.stopPropagation();
+    surfaceRef.current?.focus({ preventScroll: true });
     const movingIds = type === "drag" && selectedIds.has(card.id) ? selectedIds : new Set([card.id]);
     setSelectedId(card.id);
     setSelectedIds(movingIds);
@@ -726,6 +794,11 @@ export function CanvasWorkspace({
   });
 
   const selectedCard = document.cards.find((card) => card.id === selectedId);
+
+  useEffect(() => {
+    if (selectedCard && selectedCard.color !== color) onColorChange(selectedCard.color);
+  }, [color, onColorChange, selectedCard]);
+
   const matchingIds = useMemo(
     () => new Set(document.cards.filter((card) => cardMatchesSearch(card, search)).map((card) => card.id)),
     [document.cards, search],
@@ -738,22 +811,17 @@ export function CanvasWorkspace({
     const card = documentRef.current.cards.find((item) => item.id === cardId);
     if (!card || card.type !== "text") return;
 
-    const minimumWidth = metrics.maxLineLength > 34 ? 4 : 1;
-    const shouldWiden = card.w < minimumWidth;
     const contentHeightRows = Math.ceil((metrics.scrollHeight + GRID_GAP + 32) / stride);
     const targetHeight = Math.max(contentHeightRows, card.h);
     contentMinimumsRef.current.set(card.id, {
-      w: minimumWidth,
+      w: 1,
       h: Math.max(contentHeightRows, 1),
     });
     const shouldGrowDown = targetHeight > card.h;
-    if (!shouldWiden && !shouldGrowDown) return;
+    if (!shouldGrowDown) return;
 
-    const target = shouldWiden
-      ? { ...card, w: minimumWidth }
-      : { ...card, h: targetHeight };
     commitCards(
-      reflowCards(documentRef.current.cards, card.id, target, shouldWiden ? { x: minimumWidth - card.w, y: 0 } : { x: 0, y: 1 }),
+      reflowCards(documentRef.current.cards, card.id, { ...card, h: targetHeight }, { x: 0, y: 1 }),
       false,
     );
   };
@@ -781,6 +849,53 @@ export function CanvasWorkspace({
       false,
     );
   };
+
+  canvasPasteRef.current = (event) => {
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    const active = globalThis.document.activeElement instanceof HTMLElement ? globalThis.document.activeElement : null;
+    const activeIsMeaningful = active && active !== globalThis.document.body && active !== globalThis.document.documentElement;
+    const pasteDestination = activeIsMeaningful ? active : target;
+    if (
+      pasteDestination?.isContentEditable ||
+      (pasteDestination && /INPUT|TEXTAREA|SELECT/.test(pasteDestination.tagName)) ||
+      pasteDestination?.closest(".dialog-backdrop")
+    ) return;
+    const clipboard = event.clipboardData;
+    if (!clipboard) return;
+    const imageFiles = Array.from(clipboard.files).filter((file) => file.type.startsWith("image/") || /\.ico$/i.test(file.name));
+    const text = clipboard.getData("text/plain");
+    if (!text && imageFiles.length) {
+      event.preventDefault();
+      void addImageFiles(imageFiles);
+      window.requestAnimationFrame(() => surfaceRef.current?.focus({ preventScroll: true }));
+      return;
+    }
+    if (!text) return;
+    const rich = clipboard.getData("text/html");
+    event.preventDefault();
+    if (looksTabular(text)) addSpreadsheet(undefined, parseTable(text));
+    else if (normalizeUrl(text)) void addLink(text);
+    else {
+      const converted = convertClipboardContent(rich, text);
+      if (converted.kind === "code") {
+        const placed = addCode(undefined, converted.code, converted.language);
+        if (imageFiles.length) void addPastedImagesAbove(placed, imageFiles, []);
+      } else {
+        const placed = addText(undefined, converted.html, pastedTextWidth(text));
+        if (converted.links.length) addLinksBesideCard(placed, converted.links);
+        if (imageFiles.length || converted.images.length) {
+          void addPastedImagesAbove(placed, imageFiles, converted.images);
+        }
+      }
+    }
+    window.requestAnimationFrame(() => surfaceRef.current?.focus({ preventScroll: true }));
+  };
+
+  useEffect(() => {
+    const handlePaste = (event: ClipboardEvent) => canvasPasteRef.current(event);
+    globalThis.document.addEventListener("paste", handlePaste, true);
+    return () => globalThis.document.removeEventListener("paste", handlePaste, true);
+  }, []);
 
   const draftPreview = pendingPlacement ?? creationPreview;
   const pendingLinkPlacement = pendingPlacement?.tool === "link" ? pendingPlacement : null;
@@ -916,6 +1031,7 @@ export function CanvasWorkspace({
       }}
       onPointerDown={(event) => {
         if (event.button === 1 || event.button === 2) {
+          event.currentTarget.focus({ preventScroll: true });
           interactionRef.current = {
             type: "pan",
             button: event.button,
@@ -931,6 +1047,7 @@ export function CanvasWorkspace({
           const target = event.target as HTMLElement;
           if (target.closest(".tool-dock, .canvas-zoom-controls, .link-entry-popover, .canvas-notice")) return;
           if (pendingPlacement) return;
+          event.currentTarget.focus({ preventScroll: true });
           const bounds = event.currentTarget.getBoundingClientRect();
           const start = gridPointFromClient(event.clientX, event.clientY, bounds);
           const placement = {
@@ -949,6 +1066,7 @@ export function CanvasWorkspace({
         }
         if (event.target !== event.currentTarget && !(event.target as HTMLElement).classList.contains("canvas-world")) return;
         if (event.button === 0) {
+          event.currentTarget.focus({ preventScroll: true });
           interactionRef.current = { type: "box-select", button: event.button, startX: event.clientX, startY: event.clientY };
           setSelectedId(null);
           setSelectedIds(new Set());
@@ -997,37 +1115,6 @@ export function CanvasWorkspace({
               y: pointerY - (pointerY - current.y) * ratio,
             };
           });
-        }
-      }}
-      onPaste={(event) => {
-        if (
-          event.target instanceof HTMLElement &&
-          (event.target.isContentEditable || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName))
-        ) return;
-        const imageFiles = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/") || /\.ico$/i.test(file.name));
-        const text = event.clipboardData.getData("text/plain");
-        if (!text && imageFiles.length) {
-          event.preventDefault();
-          void addImageFiles(imageFiles);
-          return;
-        }
-        if (!text) return;
-        const rich = event.clipboardData.getData("text/html");
-        event.preventDefault();
-        if (looksTabular(text)) addSpreadsheet(undefined, parseTable(text));
-        else if (normalizeUrl(text)) void addLink(text);
-        else {
-          const converted = convertClipboardContent(rich, text);
-          if (converted.kind === "code") {
-            const placed = addCode(undefined, converted.code, converted.language);
-            if (imageFiles.length) void addPastedImagesAbove(placed, imageFiles, []);
-          } else {
-            const placed = addText(undefined, converted.html, pastedTextWidth(text));
-            if (converted.links.length) addLinksBesideCard(placed, converted.links);
-            if (imageFiles.length || converted.images.length) {
-              void addPastedImagesAbove(placed, imageFiles, converted.images);
-            }
-          }
         }
       }}
       onDragOver={(event) => event.preventDefault()}
@@ -1132,7 +1219,7 @@ export function CanvasWorkspace({
               )}
               {card.type === "image" && (
                 <div className="image-card-media">
-                  <img className="image-content" src={card.dataUrl} alt={card.label || card.fileName} draggable={false} />
+                  <CanvasImageAsset canvasPath={canvasPath} card={card} />
                   <ImageCardLabel
                     label={card.label ?? ""}
                     editing={imageLabelEditing}

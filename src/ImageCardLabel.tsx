@@ -52,6 +52,7 @@ export function ImageCardLabel({ label, editing, onEdit, onCommit, onDone }: Ima
       placeholder="Add label"
       maxLength={120}
       readOnly={!editing}
+      tabIndex={editing ? 0 : -1}
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => {
         event.stopPropagation();
