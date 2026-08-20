@@ -1,10 +1,48 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type { CanvasDocument, CanvasFile, LinkPreview } from "./types";
 import { CARD_COLORS, createEmptyDocument, createId } from "./types";
 
 const isTauri = "__TAURI_INTERNALS__" in window;
 const MOCK_FOLDER = "Datagrid Demo Library";
+
+export interface GitEnvironment {
+  available: boolean;
+  version?: string;
+}
+
+export interface RepositoryConnection {
+  folder: string;
+  remoteUrl: string;
+  needsSetup: boolean;
+  folderEmpty: boolean;
+  warning?: string;
+}
+
+export interface SaveResult {
+  commitMessage?: string;
+  warning?: string;
+  status: RepositoryStatus;
+}
+
+export interface RepositoryStatus {
+  state: "ready" | "syncing" | "synced" | "local" | "behind" | "error";
+  message: string;
+  ahead: number;
+  behind: number;
+  latestCommit?: string;
+  latestCommitAt?: string;
+}
+
+const MOCK_REPOSITORY_STATUS: RepositoryStatus = {
+  state: "synced",
+  message: "Synced with GitHub",
+  ahead: 0,
+  behind: 0,
+  latestCommit: "Updated Product garden",
+  latestCommitAt: new Date().toISOString(),
+};
 
 function seedDocument(): CanvasDocument {
   const doc = createEmptyDocument("Product garden");
@@ -61,12 +99,12 @@ function seedDocument(): CanvasDocument {
       h: 1,
       color: CARD_COLORS[4],
       createdAt: new Date().toISOString(),
-      url: "https://www.openoffice.org/why/why_odf.html",
+      url: "https://docs.github.com/en/repositories",
       preview: {
-        title: "OpenDocument Format",
-        description: "An open standard for documents that keeps your work portable.",
-        siteName: "OpenOffice",
-        domain: "openoffice.org",
+        title: "GitHub repositories",
+        description: "A private, versioned home for portable canvas files.",
+        siteName: "GitHub Docs",
+        domain: "docs.github.com",
       },
     },
   ];
@@ -77,7 +115,7 @@ function mockDocuments(): Record<string, CanvasDocument> {
   const stored = localStorage.getItem("datagrid-mock-documents");
   if (stored) return JSON.parse(stored) as Record<string, CanvasDocument>;
   const doc = seedDocument();
-  const documents = { [`${MOCK_FOLDER}\\${doc.name}.odt`]: doc };
+  const documents = { [`${MOCK_FOLDER}\\canvases\\${doc.name}`]: doc };
   localStorage.setItem("datagrid-mock-documents", JSON.stringify(documents));
   return documents;
 }
@@ -88,8 +126,44 @@ function saveMockDocuments(documents: Record<string, CanvasDocument>): void {
 
 export async function chooseLibraryFolder(): Promise<string | null> {
   if (!isTauri) return MOCK_FOLDER;
-  const selected = await open({ directory: true, multiple: false, title: "Choose your Datagrid library" });
+  const selected = await open({ directory: true, multiple: false, title: "Choose a GitHub repository folder" });
   return typeof selected === "string" ? selected : null;
+}
+
+export async function getGitEnvironment(): Promise<GitEnvironment> {
+  if (isTauri) return invoke("git_environment");
+  return { available: true, version: "Git (browser demo)" };
+}
+
+export async function openGitHubNewRepository(): Promise<void> {
+  const url = "https://github.com/new?name=datagrid-canvases&description=Private%20Datagrid%20canvas%20repository&visibility=private";
+  if (isTauri) await openUrl(url);
+  else window.open(url, "_blank", "noopener,noreferrer");
+}
+
+export async function connectRepository(folder: string, remoteUrl?: string): Promise<RepositoryConnection> {
+  if (isTauri) return invoke("connect_repository", { folder, remoteUrl });
+  return {
+    folder,
+    remoteUrl: remoteUrl || "https://github.com/example/datagrid-library.git",
+    needsSetup: false,
+    folderEmpty: false,
+  };
+}
+
+export async function syncRepository(folder: string): Promise<RepositoryStatus> {
+  if (isTauri) return invoke("sync_repository", { folder });
+  return MOCK_REPOSITORY_STATUS;
+}
+
+export async function getRepositoryStatus(folder: string): Promise<RepositoryStatus> {
+  if (isTauri) return invoke("repository_status", { folder });
+  return MOCK_REPOSITORY_STATUS;
+}
+
+export async function pushPendingCommits(folder: string): Promise<RepositoryStatus> {
+  if (isTauri) return invoke("push_pending_commits", { folder });
+  return MOCK_REPOSITORY_STATUS;
 }
 
 export async function listCanvases(folder: string): Promise<CanvasFile[]> {
@@ -110,17 +184,18 @@ export async function loadCanvas(path: string): Promise<CanvasDocument> {
   return structuredClone(document);
 }
 
-export async function saveCanvas(path: string, document: CanvasDocument): Promise<void> {
+export async function saveCanvas(path: string, document: CanvasDocument): Promise<SaveResult> {
   if (isTauri) return invoke("save_canvas", { path, document });
   const documents = mockDocuments();
   documents[path] = structuredClone(document);
   saveMockDocuments(documents);
+  return { commitMessage: `Updated ${document.name}`, status: MOCK_REPOSITORY_STATUS };
 }
 
 export async function createCanvas(folder: string, name: string): Promise<CanvasFile> {
   if (isTauri) return invoke("create_canvas", { folder, name });
   const document = createEmptyDocument(name);
-  const path = `${folder}\\${name}.odt`;
+  const path = `${folder}\\canvases\\${name}`;
   const documents = mockDocuments();
   documents[path] = document;
   saveMockDocuments(documents);
@@ -132,7 +207,7 @@ export async function renameCanvas(path: string, name: string): Promise<CanvasFi
   const documents = mockDocuments();
   const document = documents[path];
   const separator = path.includes("\\") ? "\\" : "/";
-  const nextPath = `${path.slice(0, path.lastIndexOf(separator))}${separator}${name}.odt`;
+  const nextPath = `${path.slice(0, path.lastIndexOf(separator))}${separator}${name}`;
   delete documents[path];
   document.name = name;
   document.updatedAt = new Date().toISOString();
@@ -147,17 +222,18 @@ export async function duplicateCanvas(path: string): Promise<CanvasFile> {
   const source = structuredClone(documents[path]);
   source.id = createId("canvas");
   source.name = `${source.name} copy`;
-  const nextPath = `${MOCK_FOLDER}\\${source.name}.odt`;
+  const nextPath = `${MOCK_FOLDER}\\canvases\\${source.name}`;
   documents[nextPath] = source;
   saveMockDocuments(documents);
   return { path: nextPath, name: source.name, modifiedAt: source.updatedAt, size: 0, emoji: source.emoji };
 }
 
-export async function deleteCanvas(path: string): Promise<void> {
+export async function deleteCanvas(path: string): Promise<SaveResult> {
   if (isTauri) return invoke("delete_canvas", { path });
   const documents = mockDocuments();
   delete documents[path];
   saveMockDocuments(documents);
+  return { commitMessage: "Removed Canvas", status: MOCK_REPOSITORY_STATUS };
 }
 
 export async function revealLibrary(folder: string): Promise<void> {

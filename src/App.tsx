@@ -3,14 +3,22 @@ import { CanvasWorkspace } from "./CanvasWorkspace";
 import bindersIcon from "./assets/binders.svg";
 import {
   chooseLibraryFolder,
+  connectRepository,
   createCanvas,
   deleteCanvas,
   duplicateCanvas,
+  getGitEnvironment,
+  getRepositoryStatus,
   listCanvases,
   loadCanvas,
+  openGitHubNewRepository,
+  pushPendingCommits,
   renameCanvas,
   revealLibrary,
   saveCanvas,
+  syncRepository,
+  type GitEnvironment,
+  type RepositoryStatus,
 } from "./api";
 import {
   ChevronIcon,
@@ -109,6 +117,25 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [customEmoji, setCustomEmoji] = useState("");
+  const [gitEnvironment, setGitEnvironment] = useState<GitEnvironment | null>(null);
+  const [repositoryUrl, setRepositoryUrl] = useState("");
+  const [connectingRepository, setConnectingRepository] = useState(false);
+  const [repositorySetupFolder, setRepositorySetupFolder] = useState<string | null>(null);
+  const [repositorySetupFolderEmpty, setRepositorySetupFolderEmpty] = useState(true);
+  const [repositoryStatus, setRepositoryStatus] = useState<RepositoryStatus | null>(null);
+  const repositoryStatusRef = useRef<RepositoryStatus | null>(null);
+  const syncInFlightRef = useRef(false);
+  const statusRefreshInFlightRef = useRef(false);
+
+  useEffect(() => {
+    void getGitEnvironment()
+      .then(setGitEnvironment)
+      .catch(() => setGitEnvironment({ available: false }));
+  }, []);
+
+  useEffect(() => {
+    repositoryStatusRef.current = repositoryStatus;
+  }, [repositoryStatus]);
 
   useEffect(() => {
     setEmojiPickerOpen(false);
@@ -129,6 +156,35 @@ export default function App() {
       setError(reason instanceof Error ? reason.message : String(reason));
     }
   }, [libraryFolder]);
+
+  const refreshRepositoryStatus = useCallback(async () => {
+    if (!libraryFolder || statusRefreshInFlightRef.current) return;
+    statusRefreshInFlightRef.current = true;
+    try {
+      setRepositoryStatus(await getRepositoryStatus(libraryFolder));
+    } catch (reason) {
+      setRepositoryStatus({
+        state: "error",
+        message: "Git status unavailable",
+        ahead: 0,
+        behind: 0,
+      });
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      statusRefreshInFlightRef.current = false;
+    }
+  }, [libraryFolder]);
+
+  const showBackgroundSync = useCallback(() => {
+    setRepositoryStatus((current) => ({
+      state: "syncing",
+      message: "Saved locally — syncing with GitHub…",
+      ahead: current?.ahead ?? 0,
+      behind: current?.behind ?? 0,
+      latestCommit: current?.latestCommit,
+      latestCommitAt: current?.latestCommitAt,
+    }));
+  }, []);
 
   const openFile = useCallback(async (file: CanvasFile | string) => {
     const path = typeof file === "string" ? file : file.path;
@@ -157,6 +213,18 @@ export default function App() {
     void (async () => {
       setLoading(true);
       try {
+        const connection = await connectRepository(libraryFolder);
+        if (connection.needsSetup) {
+          if (!cancelled) {
+            setRepositorySetupFolder(connection.folder);
+            setRepositorySetupFolderEmpty(connection.folderEmpty);
+            setLibraryFolder("");
+            setOpenCanvases([]);
+            canvasesRef.current = [];
+            setActivePath(null);
+          }
+          return;
+        }
         const nextFiles = await listCanvases(libraryFolder);
         if (cancelled) return;
         setFiles(nextFiles);
@@ -164,6 +232,69 @@ export default function App() {
         const restored = initialSession.openPaths.filter((path) => available.has(path));
         for (const path of restored) await openFile(path);
         if (!restored.length && nextFiles[0]) await openFile(nextFiles[0]);
+        if (cancelled) return;
+        setLoading(false);
+
+        void (async () => {
+          setRepositoryStatus((current) => ({
+            state: "syncing",
+            message: "Checking GitHub for updates…",
+            ahead: current?.ahead ?? 0,
+            behind: current?.behind ?? 0,
+            latestCommit: current?.latestCommit,
+            latestCommitAt: current?.latestCommitAt,
+          }));
+          try {
+            const status = await syncRepository(libraryFolder);
+            if (cancelled) return;
+            setRepositoryStatus(status);
+
+            const syncedFiles = await listCanvases(libraryFolder);
+            if (cancelled) return;
+            setFiles(syncedFiles);
+            const syncedPaths = new Set(syncedFiles.map((file) => file.path));
+            const cleanCanvases = canvasesRef.current.filter((canvas) => !canvas.dirty && !canvas.saving && syncedPaths.has(canvas.path));
+            const refreshedDocuments = new Map<string, CanvasDocument>();
+            for (const canvas of cleanCanvases) {
+              refreshedDocuments.set(canvas.path, await loadCanvas(canvas.path));
+            }
+            if (cancelled) return;
+            const refreshedPaths: string[] = [];
+            const refreshedCanvases = canvasesRef.current
+              .filter((canvas) => syncedPaths.has(canvas.path) || canvas.dirty || canvas.saving)
+              .map((canvas) => {
+                const document = refreshedDocuments.get(canvas.path);
+                if (!document || canvas.dirty || canvas.saving) return canvas;
+                refreshedPaths.push(canvas.path);
+                return { ...canvas, document };
+              });
+            for (const path of refreshedPaths) histories.current.set(path, { past: [], future: [] });
+            canvasesRef.current = refreshedCanvases;
+            setOpenCanvases(refreshedCanvases);
+            setActivePath((current) => current && refreshedCanvases.some((canvas) => canvas.path === current)
+              ? current
+              : refreshedCanvases[0]?.path ?? null);
+            if (!refreshedCanvases.length && syncedFiles[0]) await openFile(syncedFiles[0]);
+          } catch (reason) {
+            if (cancelled) return;
+            try {
+              const local = await getRepositoryStatus(libraryFolder);
+              setRepositoryStatus(local.state === "local" ? local : {
+                ...local,
+                state: "error",
+                message: "GitHub unavailable — working from the local repository",
+              });
+            } catch {
+              setRepositoryStatus({
+                state: "error",
+                message: "GitHub unavailable — local status could not be read",
+                ahead: 0,
+                behind: 0,
+              });
+            }
+            setError(`Couldn’t sync the repository; the local copy remains open. ${reason instanceof Error ? reason.message : String(reason)}`);
+          }
+        })();
       } catch (reason) {
         if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
       } finally {
@@ -172,6 +303,66 @@ export default function App() {
     })();
     return () => { cancelled = true; };
   }, [initialSession.openPaths, libraryFolder, openFile]);
+
+  const retryPendingPush = useCallback(async (showErrors = true) => {
+    if (!libraryFolder || syncInFlightRef.current) return;
+    syncInFlightRef.current = true;
+    const current = repositoryStatusRef.current;
+    setRepositoryStatus({
+      state: "syncing",
+      message: current?.ahead ? `Pushing ${current.ahead} local commit${current.ahead === 1 ? "" : "s"}…` : "Checking GitHub connection…",
+      ahead: current?.ahead ?? 0,
+      behind: current?.behind ?? 0,
+      latestCommit: current?.latestCommit,
+      latestCommitAt: current?.latestCommitAt,
+    });
+    try {
+      setRepositoryStatus(await pushPendingCommits(libraryFolder));
+    } catch (reason) {
+      try {
+        const local = await getRepositoryStatus(libraryFolder);
+        setRepositoryStatus(local.state === "local" ? local : {
+          ...local,
+          state: "error",
+          message: "GitHub is unreachable — changes remain safe locally",
+        });
+      } catch {
+        setRepositoryStatus({
+          state: "error",
+          message: "GitHub is unreachable — changes remain safe locally",
+          ahead: current?.ahead ?? 0,
+          behind: current?.behind ?? 0,
+          latestCommit: current?.latestCommit,
+          latestCommitAt: current?.latestCommitAt,
+        });
+      }
+      if (showErrors) setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      syncInFlightRef.current = false;
+    }
+  }, [libraryFolder]);
+
+  useEffect(() => {
+    if (!libraryFolder) return;
+    const timer = window.setInterval(() => {
+      const status = repositoryStatusRef.current;
+      if (status?.ahead) {
+        void retryPendingPush(false);
+      }
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [libraryFolder, retryPendingPush]);
+
+  useEffect(() => {
+    if (!libraryFolder) return;
+    const timer = window.setInterval(() => {
+      const status = repositoryStatusRef.current;
+      if (status?.state === "syncing" || status?.state === "local") {
+        void refreshRepositoryStatus();
+      }
+    }, 2_000);
+    return () => window.clearInterval(timer);
+  }, [libraryFolder, refreshRepositoryStatus]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -200,7 +391,7 @@ export default function App() {
     setOpenCanvases(savingState);
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     try {
-      await saveCanvas(path, documentToSave);
+      const result = await saveCanvas(path, documentToSave);
       const latest = canvasesRef.current.find((item) => item.path === path);
       const stillDirty = latest ? savedContentKey(latest.document) !== contentKeyToSave : false;
       const savedAt = new Date().toISOString();
@@ -209,6 +400,12 @@ export default function App() {
         : item);
       canvasesRef.current = savedState;
       setOpenCanvases(savedState);
+      setRepositoryStatus((current) => ({
+        ...result.status,
+        latestCommit: result.status.latestCommit ?? current?.latestCommit,
+        latestCommitAt: result.status.latestCommitAt ?? current?.latestCommitAt,
+      }));
+      if (result.warning) setError(result.warning);
       void refreshFiles();
     } catch (reason) {
       const failedState = canvasesRef.current.map((item) => item.path === path ? { ...item, saving: false } : item);
@@ -219,13 +416,14 @@ export default function App() {
   }, [refreshFiles]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
+    if (!openCanvases.some((canvas) => canvas.dirty && !canvas.saving)) return;
+    const timer = window.setTimeout(() => {
       for (const canvas of canvasesRef.current) {
         if (canvas.dirty && !canvas.saving) void saveCanvasNow(canvas.path);
       }
-    }, 25_000);
-    return () => window.clearInterval(timer);
-  }, [saveCanvasNow]);
+    }, 750);
+    return () => window.clearTimeout(timer);
+  }, [openCanvases, saveCanvasNow]);
 
   const activeCanvas = openCanvases.find((canvas) => canvas.path === activePath) ?? null;
   const history = activePath ? histories.current.get(activePath) : undefined;
@@ -314,21 +512,69 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   });
 
+  const activateRepository = async (folder: string, remoteUrl?: string) => {
+    setConnectingRepository(true);
+    try {
+      const connected = await connectRepository(folder, remoteUrl);
+      if (connected.needsSetup) {
+        setLibraryFolder("");
+        setRepositorySetupFolder(connected.folder);
+        setRepositorySetupFolderEmpty(connected.folderEmpty);
+        setOpenCanvases([]);
+        canvasesRef.current = [];
+        setActivePath(null);
+        setError(null);
+        return;
+      }
+      setLibraryFolder(connected.folder);
+      setRepositorySetupFolder(null);
+      setRepositoryStatus(null);
+      setOpenCanvases([]);
+      canvasesRef.current = [];
+      setActivePath(null);
+      if (connected.warning) setError(connected.warning);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setConnectingRepository(false);
+    }
+  };
+
   const selectFolder = async () => {
     const selected = await chooseLibraryFolder();
     if (!selected) return;
-    setLibraryFolder(selected);
-    setOpenCanvases([]);
-    canvasesRef.current = [];
-    setActivePath(null);
+    await activateRepository(selected);
+  };
+
+  const cloneRepository = async () => {
+    const remote = repositoryUrl.trim();
+    if (!remote) {
+      setError("Enter the URL of your private GitHub repository.");
+      return;
+    }
+    const selected = repositorySetupFolder && repositorySetupFolderEmpty
+      ? repositorySetupFolder
+      : await chooseLibraryFolder();
+    if (!selected) return;
+    await activateRepository(selected, remote);
+  };
+
+  const createPrivateRepository = async () => {
+    try {
+      await openGitHubNewRepository();
+    } catch (reason) {
+      setError(`Couldn’t open GitHub: ${reason instanceof Error ? reason.message : String(reason)}`);
+    }
   };
 
   const addCanvas = async () => {
     const name = newCanvasName.trim() || "Untitled canvas";
     try {
       const file = await createCanvas(libraryFolder, name);
+      if (file.warning) setError(file.warning);
       setNewCanvasName("");
       setNewCanvasOpen(false);
+      showBackgroundSync();
       await refreshFiles();
       await openFile(file);
     } catch (reason) {
@@ -351,11 +597,13 @@ export default function App() {
     if (!name || name === file.name) return;
     try {
       const renamed = await renameCanvas(file.path, name);
+      if (renamed.warning) setError(renamed.warning);
       setOpenCanvases((current) => current.map((canvas) => canvas.path === file.path ? { ...canvas, path: renamed.path, document: { ...canvas.document, name: renamed.name } } : canvas));
       canvasesRef.current = canvasesRef.current.map((canvas) => canvas.path === file.path ? { ...canvas, path: renamed.path, document: { ...canvas.document, name: renamed.name } } : canvas);
       histories.current.set(renamed.path, histories.current.get(file.path) ?? { past: [], future: [] });
       histories.current.delete(file.path);
       if (activePath === file.path) setActivePath(renamed.path);
+      showBackgroundSync();
       await refreshFiles();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -365,6 +613,8 @@ export default function App() {
   const handleDuplicate = async (file: CanvasFile) => {
     try {
       const copy = await duplicateCanvas(file.path);
+      if (copy.warning) setError(copy.warning);
+      showBackgroundSync();
       await refreshFiles();
       await openFile(copy);
     } catch (reason) {
@@ -375,7 +625,9 @@ export default function App() {
   const handleDelete = async (file: CanvasFile) => {
     if (!window.confirm(`Move “${file.name}” to Datagrid’s recovery folder?`)) return;
     try {
-      await deleteCanvas(file.path);
+      const result = await deleteCanvas(file.path);
+      setRepositoryStatus(result.status);
+      if (result.warning) setError(result.warning);
       closeTab(file.path);
       await refreshFiles();
     } catch (reason) {
@@ -411,14 +663,85 @@ export default function App() {
       <main className="onboarding-shell">
         <div className="onboarding-glow glow-one"/>
         <div className="onboarding-glow glow-two"/>
-        <section className="onboarding-card">
-          <div className="brand-mark large-mark"><img src={bindersIcon} alt=""/></div>
-          <span className="eyebrow">Welcome to Datagrid</span>
-          <h1>A place for everything<br/>you’re thinking about.</h1>
-          <p>Choose a folder for your canvas library. Every canvas remains a portable OpenDocument file that belongs entirely to you.</p>
-          <button className="primary-action" onClick={() => void selectFolder()}><FolderIcon/> Choose library folder</button>
-          <span className="privacy-note">No account. No cloud. No lock-in.</span>
+        <section className={`onboarding-card${gitEnvironment?.available ? " setup-ready" : ""}`}>
+          <div className="onboarding-intro">
+            <div className="brand-mark large-mark"><img src={bindersIcon} alt=""/></div>
+            <span className="eyebrow">Welcome to Datagrid</span>
+            <h1>Your private canvas<br/>repository.</h1>
+          {gitEnvironment === null ? (
+            <p>Checking for Git…</p>
+          ) : !gitEnvironment.available ? (
+            <div className="git-required">
+              <p>Datagrid uses Git to keep your canvases in a private GitHub repository. Install Git, then restart Datagrid.</p>
+              <a className="primary-action" href="https://git-scm.com/downloads" target="_blank" rel="noreferrer">Install Git</a>
+            </div>
+          ) : (
+            <>
+              <p>{repositorySetupFolder
+                ? "This folder is not a Git repository yet. Create a private repository on GitHub, then Datagrid will connect it for you."
+                : "Create a private repository in GitHub, then connect Datagrid to its local clone."}</p>
+              {repositorySetupFolder && (
+                <div className={`setup-folder${repositorySetupFolderEmpty ? "" : " has-files"}`}>
+                  <FolderIcon size={16}/>
+                  <div>
+                    <strong>Selected folder</strong>
+                    <span title={repositorySetupFolder}>{repositorySetupFolder}</span>
+                    {!repositorySetupFolderEmpty && <em>This folder contains files, so choose an empty folder when cloning.</em>}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+          </div>
+          {gitEnvironment?.available && (
+            <>
+              <div className="repository-steps">
+                <section className="repository-step">
+                  <span className="step-number">1</span>
+                  <div>
+                    <strong>Create the repository</strong>
+                    <span>GitHub opens with private visibility already selected.</span>
+                    <button className="secondary-action" type="button" onClick={() => void createPrivateRepository()}>
+                      Create private repository on GitHub
+                    </button>
+                  </div>
+                </section>
+                <section className="repository-step">
+                  <span className="step-number">2</span>
+                  <div>
+                    <strong>Clone and use it</strong>
+                    <span>{repositorySetupFolder && repositorySetupFolderEmpty
+                      ? "Copy the repository’s HTTPS URL. Datagrid will clone it into the selected folder."
+                      : "Copy the repository’s HTTPS URL from GitHub and paste it below."}</span>
+                    <form className="repository-connect" onSubmit={(event) => { event.preventDefault(); void cloneRepository(); }}>
+                      <input
+                        value={repositoryUrl}
+                        onChange={(event) => setRepositoryUrl(event.currentTarget.value)}
+                        placeholder="https://github.com/you/datagrid-canvases.git"
+                        aria-label="Private GitHub repository URL"
+                      />
+                      <button className="primary-action" type="submit" disabled={connectingRepository}>
+                        <GridIcon/> {connectingRepository
+                          ? "Connecting…"
+                          : repositorySetupFolder && repositorySetupFolderEmpty
+                            ? "Clone into selected folder"
+                            : "Choose empty folder and clone"}
+                      </button>
+                    </form>
+                  </div>
+                </section>
+              </div>
+              <div className="onboarding-alternative">
+                <span className="repository-divider">or</span>
+                <button className="secondary-action" disabled={connectingRepository} onClick={() => void selectFolder()}>
+                  <FolderIcon/> {repositorySetupFolder ? "Choose another folder" : "Open an existing clone"}
+                </button>
+                <span className="privacy-note">Markdown, CSV, and original images—versioned in your repository.</span>
+              </div>
+            </>
+          )}
         </section>
+        {error && <div className="error-toast"><span>{error}</span><button onClick={() => setError(null)}><XIcon size={16}/></button></div>}
       </main>
     );
   }
@@ -492,7 +815,24 @@ export default function App() {
           {!files.length && !loading && <div className="empty-library"><GridIcon size={24}/><span>No canvases yet</span></div>}
         </div>
         <div className="library-footer">
-          <button onClick={() => void revealLibrary(libraryFolder)}><FolderIcon size={17}/><span>Open library folder</span><ChevronIcon size={14}/></button>
+          <div className={`repository-status ${repositoryStatus?.state ?? "syncing"}`} aria-live="polite">
+            <span className="repository-status-dot"/>
+            <div>
+              <strong>{repositoryStatus?.message ?? "Reading Git status…"}</strong>
+              {repositoryStatus?.latestCommit && (
+                <span title={repositoryStatus.latestCommit}>
+                  Latest: {repositoryStatus.latestCommit}
+                  {repositoryStatus.latestCommitAt ? ` · ${fileTime(repositoryStatus.latestCommitAt)}` : ""}
+                </span>
+              )}
+            </div>
+            {repositoryStatus && (repositoryStatus.state === "local" || repositoryStatus.state === "error") && (
+              <button type="button" title="Retry GitHub push" onClick={() => void retryPendingPush()}>
+                Retry
+              </button>
+            )}
+          </div>
+          <button className="open-repository-button" onClick={() => void revealLibrary(libraryFolder)}><FolderIcon size={17}/><span>Open repository folder</span><ChevronIcon size={14}/></button>
           <button className="folder-path" title={libraryFolder} onClick={() => void selectFolder()}>{libraryFolder}</button>
         </div>
       </aside>
@@ -544,7 +884,7 @@ export default function App() {
         ) : (
           <div className="no-canvas-view">
             <div className="no-canvas-art"><GridIcon size={36}/></div>
-            <h2>Open a canvas from your library</h2>
+            <h2>Open a canvas from your repository</h2>
             <p>Or begin with a fresh grid.</p>
             <button className="primary-action compact" onClick={() => setNewCanvasOpen(true)}><PlusIcon/> New canvas</button>
           </div>
@@ -556,7 +896,7 @@ export default function App() {
           <form className="small-dialog" onSubmit={(event) => { event.preventDefault(); void addCanvas(); }}>
             <span className="dialog-icon"><GridIcon/></span>
             <h2>New canvas</h2>
-            <p>Give this corner of your library a name.</p>
+            <p>Give this canvas folder a name.</p>
             <input autoFocus value={newCanvasName} onChange={(event) => setNewCanvasName(event.currentTarget.value)} placeholder="Canvas name" maxLength={100}/>
             <div className="dialog-actions"><button type="button" onClick={() => setNewCanvasOpen(false)}>Cancel</button><button type="submit" className="primary-action compact">Create canvas</button></div>
           </form>

@@ -166,21 +166,10 @@ function readImage(file: File): Promise<NewImageCard> {
   });
 }
 
-function imageDataUrlToPngBlob(dataUrl: string): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onerror = () => reject(new Error("Could not decode image."));
-    image.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = image.naturalWidth;
-      canvas.height = image.naturalHeight;
-      const context = canvas.getContext("2d");
-      if (!context) { reject(new Error("Canvas unavailable.")); return; }
-      context.drawImage(image, 0, 0);
-      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("Could not encode PNG."))), "image/png");
-    };
-    image.src = dataUrl;
-  });
+async function imageDataUrlToOriginalBlob(dataUrl: string, mimeType: string): Promise<Blob> {
+  const response = await fetch(dataUrl);
+  const blob = await response.blob();
+  return blob.type === mimeType ? blob : blob.slice(0, blob.size, mimeType);
 }
 
 function cardMatchesSearch(card: CanvasCard, query: string): boolean {
@@ -611,8 +600,8 @@ export function CanvasWorkspace({
       } else if (card.type === "spreadsheet") {
         await navigator.clipboard.writeText(spreadsheetToCsv(card));
       } else if (card.type === "image") {
-        const blob = await imageDataUrlToPngBlob(card.dataUrl);
-        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        const blob = await imageDataUrlToOriginalBlob(card.dataUrl, card.mimeType);
+        await navigator.clipboard.write([new ClipboardItem({ [card.mimeType]: blob })]);
       }
       setCopiedCardId(card.id);
       if (copiedTimeoutRef.current !== null) window.clearTimeout(copiedTimeoutRef.current);
@@ -621,7 +610,9 @@ export function CanvasWorkspace({
         copiedTimeoutRef.current = null;
       }, 1200);
     } catch {
-      setNotice("Couldn't copy to clipboard.");
+      setNotice(card.type === "image"
+        ? `Couldn't copy the original ${card.mimeType} image format to the clipboard.`
+        : "Couldn't copy to clipboard.");
     }
   };
 

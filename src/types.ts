@@ -105,6 +105,7 @@ export interface CanvasFile {
   modifiedAt: string;
   size: number;
   emoji?: string;
+  warning?: string;
 }
 
 export interface OpenCanvas {

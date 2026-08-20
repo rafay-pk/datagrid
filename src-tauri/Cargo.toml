@@ -28,7 +28,6 @@ regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
-zip = { version = "4", default-features = false, features = ["deflate"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

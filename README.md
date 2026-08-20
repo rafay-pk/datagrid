@@ -22,7 +22,7 @@
 
 Datagrid replaces the freeform "sticky notes on a canvas" model with a structured two-dimensional grid. Cards snap into evenly spaced slots, reflow around one another as you add and move content, and stay directly editable on the canvas — no separate editor window.
 
-Every canvas is saved as a single OpenDocument Text (`.odt`) file containing its layout, text, images, link previews, and embedded spreadsheets, so your notes stay readable outside Datagrid too.
+Every canvas is saved in a private GitHub repository as readable Markdown, CSV, and original image files. Git keeps a complete history of the edits while the repository remains usable outside Datagrid.
 
 ## Features
 
@@ -46,9 +46,12 @@ Every canvas is saved as a single OpenDocument Text (`.odt`) file containing its
 - Adjustable interface scale and font, with four bundled variable typefaces (DM Sans, Figtree, Manrope, Work Sans)
 
 **Storage & privacy**
-- You choose a local library folder — Datagrid never uploads canvas data anywhere
-- Each canvas is a portable, standards-based `.odt` file that other OpenDocument software can open
-- Offline-first; the only feature that touches the network is fetching a link preview, and the result is cached inside the canvas afterward
+- Connect an existing private GitHub repository or clone one from the welcome screen
+- Create a private repository through Datagrid's pre-filled GitHub browser link, then paste its HTTPS clone URL
+- Text, code, and links are collected in `canvas.md`; every spreadsheet and image remains a separate CSV or original-format image file
+- Datagrid applies edits immediately, saves them locally after a short debounce, and commits and pushes card-level summaries in the background
+- If GitHub is unreachable, commits remain safely stored in the local repository and Datagrid retries them in the background
+- Link-preview metadata and images are cached in the canvas for offline use
 
 ## Installation
 
@@ -61,22 +64,17 @@ Every canvas is saved as a single OpenDocument Text (`.odt`) file containing its
 
 Windows may display a warning for unsigned applications. Review the downloaded file and repository before continuing.
 
-macOS and Linux users can run Datagrid from source using the development instructions below; see [Portability](#portability) for a note on cross-platform release builds.
+macOS and Linux users can run Datagrid from source using the development instructions below.
 
-## Demo data
+## Connect a repository
 
-A sample canvas is available to see Datagrid's card types and grid layout without starting from a blank canvas.
+On first launch, Datagrid can open GitHub's new-repository form with private visibility selected. Create the repository, copy its HTTPS URL, paste it into Datagrid, and choose an empty local folder for the clone. If you select a folder that is not yet a Git repository, Datagrid keeps that choice and guides you through these setup steps instead of stopping at an error. If the repository is already cloned, choose **Open an existing clone** instead.
 
-1. Download [Demo Data](FirstCanvas.odt).
-2. Choose (or open) your library folder.
-3. Copy the downloaded file into that folder.
-4. Restart Datagrid, or reopen the library folder, so it picks up the new file — then open it from the canvas list.
-
-Datagrid doesn't watch the library folder for changes made outside the app, so files added directly to the folder only appear after a refresh.
+The repository status strip in the sidebar shows the latest commit and whether GitHub is synced. Datagrid opens the local canvases immediately at launch, then checks GitHub in the background and refreshes clean tabs after synchronization. Saving never waits for GitHub: changes are written locally first, then committed and pushed in the background. Work remains available offline, and Datagrid retries pending commits and pushes while it is running or when the repository is next opened.
 
 ## Development
 
-Datagrid is built with [Tauri 2](https://tauri.app), React 19, TypeScript, and Vite on the frontend, with a Rust backend that handles canvas storage, ODT file generation, and link preview fetching.
+Datagrid is built with [Tauri 2](https://tauri.app), React 19, TypeScript, and Vite on the frontend, with a Rust backend that handles Git synchronization, portable canvas files, and link preview fetching.
 
 ### Requirements
 
@@ -84,6 +82,7 @@ All platforms need:
 
 - [Node.js](https://nodejs.org/) 18 or later
 - [Rust](https://www.rust-lang.org/tools/install) (via `rustup`)
+- [Git](https://git-scm.com/downloads), with a credential helper capable of GitHub's browser sign-in for private repositories
 
 Plus the platform-specific toolchain below, matching [Tauri's prerequisites](https://v2.tauri.app/start/prerequisites/).
 
@@ -163,13 +162,13 @@ Installers are generated under `src-tauri/target/release/bundle/`.
 
 ## Data and privacy
 
-Datagrid does not require an account. Canvas files remain in the library folder selected by the user, and no canvas data is sent to a Datagrid service.
+Datagrid does not use a Datagrid account or service. Canvas files remain in the local repository selected by the user and are synchronized only with its configured GitHub remote through the system Git installation.
 
 Link previews require a network connection when first collected. Their metadata and preview images are then stored inside the canvas for offline use.
 
-## Portability
+## Repository layout
 
-Datagrid canvases are standard `.odt` files with embedded spreadsheet documents and images. Other OpenDocument applications can access the underlying content even when they do not understand Datagrid's spatial layout.
+Each directory below `canvases/` contains a `canvas.md`, a small `.datagrid.json` layout file, CSV files below `spreadsheets/`, and original image assets below `images/`. The Markdown and CSV content is readable without Datagrid; `.datagrid.json` preserves coordinates and card presentation details.
 
 ## Contributing
 
