@@ -15,7 +15,7 @@ import sql from "highlight.js/lib/languages/sql";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import { CodeIcon, TextIcon } from "./icons";
+import { CodeIcon } from "./icons";
 import { trimTrailingEmptyLines } from "./textFormat";
 
 hljs.registerLanguage("bash", bash);
@@ -63,7 +63,6 @@ interface CodeEditorProps {
   onLanguageChange: (language: string) => void;
   onFocus: () => void;
   onActiveChange?: (active: boolean) => void;
-  onConvertToText: () => void;
   onMeasure: (metrics: {
     contentWidth: number;
     contentHeight: number;
@@ -77,7 +76,6 @@ export function CodeEditor({
   onLanguageChange,
   onFocus,
   onActiveChange,
-  onConvertToText,
   onMeasure,
 }: CodeEditorProps) {
   const highlightRef = useRef<HTMLElement>(null);
@@ -142,7 +140,7 @@ export function CodeEditor({
 
   return (
     <div className="code-card-content">
-      <div className="code-card-toolbar">
+      <div className="card-header code-card-toolbar">
         <CodeIcon size={15}/>
         <select
           value={language}
@@ -153,9 +151,7 @@ export function CodeEditor({
           <option value="auto">Auto · {detectedLabel}</option>
           {LANGUAGE_OPTIONS.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
         </select>
-        <button type="button" title="Convert to text card" aria-label="Convert to text card" onClick={onConvertToText}>
-          <TextIcon size={15}/>
-        </button>
+        <span className="card-header-drag-region" aria-hidden="true" />
       </div>
       <div className="code-editor-wrap">
         <pre aria-hidden="true"><code ref={highlightRef} className="hljs" dangerouslySetInnerHTML={{ __html: `${highlighted.html}\n` }}/></pre>
