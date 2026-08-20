@@ -1,5 +1,21 @@
 import type { TextBlock, TextRun } from "./types";
 
+export function extractTextTitle(html: string): { title: string; html: string } {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  const firstElement = template.content.firstElementChild;
+  if (!firstElement || !/^H[12]$/.test(firstElement.tagName)) return { title: "", html };
+  const title = (firstElement.textContent ?? "").replace(/\u00a0/g, " ").trim();
+  while (template.content.firstChild !== firstElement && !template.content.firstChild?.textContent?.trim()) {
+    template.content.firstChild?.remove();
+  }
+  firstElement.remove();
+  while (template.content.firstChild?.nodeType === Node.TEXT_NODE && !template.content.firstChild.textContent?.trim()) {
+    template.content.firstChild.remove();
+  }
+  return { title, html: template.innerHTML };
+}
+
 function runsFromNode(node: Node, inherited: Omit<TextRun, "text"> = {}): TextRun[] {
   if (node.nodeType === Node.TEXT_NODE) {
     const text = node.textContent ?? "";

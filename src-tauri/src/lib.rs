@@ -148,11 +148,23 @@ fn render_runs(runs: &[Value]) -> String {
 }
 
 fn render_text_card(card: &Value) -> String {
-    let blocks = card.get("blocks").and_then(Value::as_array);
-    let Some(blocks) = blocks else {
-        return "<text:p/>".to_string();
-    };
+    let blocks = card
+        .get("blocks")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
     let mut output = String::new();
+    if let Some(title) = card
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+    {
+        output.push_str(&format!(
+            "<text:h text:outline-level=\"1\">{}</text:h>",
+            escape_xml(title)
+        ));
+    }
     let mut list_kind: Option<&str> = None;
     for block in blocks {
         let kind = block.get("kind").and_then(Value::as_str).unwrap_or("paragraph");
@@ -192,7 +204,11 @@ fn render_text_card(card: &Value) -> String {
     if list_kind.is_some() {
         output.push_str("</text:list>");
     }
-    output
+    if output.is_empty() {
+        "<text:p/>".to_string()
+    } else {
+        output
+    }
 }
 
 fn render_code_card(card: &Value) -> String {
