@@ -148,6 +148,7 @@ function toggleChecklist(editor: HTMLElement): void {
 
 export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertToCode, onPasteLinks, onPasteImages, onMeasure }: TextEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
   const measureFrameRef = useRef<number | null>(null);
   const inputEventCountRef = useRef(0);
   const onMeasureRef = useRef(onMeasure);
@@ -168,6 +169,43 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertT
       italic: document.queryCommandState("italic"),
       underline: document.queryCommandState("underline"),
     });
+  };
+
+  const syncToolbarPosition = () => {
+    const editor = editorRef.current;
+    const toolbar = toolbarRef.current;
+    const card = editor?.parentElement;
+    const selection = window.getSelection();
+    const focusNode = selection?.focusNode;
+    if (!editor || !toolbar || !card || !selection || !focusNode || (focusNode !== editor && !editor.contains(focusNode))) return;
+
+    const caretRange = document.createRange();
+    caretRange.setStart(focusNode, selection.focusOffset);
+    caretRange.collapse(true);
+    const caretRect = caretRange.getClientRects()[0];
+    const cardRect = card.getBoundingClientRect();
+    if (!cardRect.height) return;
+
+    const scale = cardRect.height / card.offsetHeight;
+    const blockRect = selectionBlock()?.getBoundingClientRect();
+    const lineHeight = Number.parseFloat(window.getComputedStyle(editor).lineHeight) * scale;
+    const caretCenter = caretRect
+      ? caretRect.top + (caretRect.height || lineHeight) / 2
+      : (blockRect?.top ?? cardRect.top) + Math.min(blockRect?.height ?? lineHeight, lineHeight) / 2;
+    const desiredTop = (caretCenter - cardRect.top) / scale;
+    const toolbarHalf = toolbar.offsetHeight / 2;
+    const edgeGap = 4;
+    const minTop = toolbarHalf + edgeGap;
+    const maxTop = card.clientHeight - toolbarHalf - edgeGap;
+    const nextTop = maxTop < minTop
+      ? card.clientHeight / 2
+      : Math.min(Math.max(desiredTop, minTop), maxTop);
+    toolbar.style.top = `${Math.round(nextTop * 10) / 10}px`;
+  };
+
+  const syncSelectionState = () => {
+    syncActiveFormats();
+    syncToolbarPosition();
   };
 
   const measure = () => {
@@ -221,7 +259,10 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertT
   useLayoutEffect(() => {
     const editor = editorRef.current;
     if (!editor) return;
-    const observer = new ResizeObserver(() => measure());
+    const observer = new ResizeObserver(() => {
+      measure();
+      syncToolbarPosition();
+    });
     observer.observe(editor);
     return () => observer.disconnect();
   }, []);
@@ -231,9 +272,13 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertT
   }, []);
 
   useEffect(() => {
-    document.addEventListener("selectionchange", syncActiveFormats);
-    return () => document.removeEventListener("selectionchange", syncActiveFormats);
+    document.addEventListener("selectionchange", syncSelectionState);
+    return () => document.removeEventListener("selectionchange", syncSelectionState);
   }, []);
+
+  useLayoutEffect(() => {
+    if (toolbarVisible) syncToolbarPosition();
+  }, [toolbarVisible]);
 
   useLayoutEffect(() => {
     measure();
@@ -251,7 +296,7 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertT
     editorRef.current?.focus({ preventScroll: true });
     document.execCommand(command);
     emitChange();
-    syncActiveFormats();
+    syncSelectionState();
   };
 
   const runChecklistToggle = () => {
@@ -269,13 +314,19 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertT
     const block = selectionBlock();
     document.execCommand("formatBlock", false, block?.tagName === "H2" ? "div" : "h2");
     emitChange();
-    syncActiveFormats();
+    syncSelectionState();
   };
 
   return (
     <>
       {toolbarVisible && (
-        <div className="text-toolbar" role="toolbar" aria-label="Text formatting" onMouseDown={(event) => event.preventDefault()}>
+        <div
+          ref={toolbarRef}
+          className="text-toolbar"
+          role="toolbar"
+          aria-label="Text formatting"
+          onMouseDown={(event) => event.preventDefault()}
+        >
           <button type="button" className={activeFormats.heading ? "active" : ""} aria-label="Heading" aria-pressed={activeFormats.heading} title="Heading (# )" onClick={runHeadingToggle}><span className="text-toolbar-glyph" aria-hidden="true">#</span></button>
           <span className="text-toolbar-divider"/>
           <button type="button" className={activeFormats.bold ? "active" : ""} aria-pressed={activeFormats.bold} title="Bold (Ctrl+B)" onClick={() => runCommand("bold")}><BoldIcon size={14}/></button>
@@ -298,7 +349,7 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertT
         suppressContentEditableWarning
         data-placeholder="Write something…"
         spellCheck
-        onFocus={() => { setToolbarVisible(true); onActiveChange?.(true); onFocus(); requestAnimationFrame(syncActiveFormats); }}
+        onFocus={() => { setToolbarVisible(true); onActiveChange?.(true); onFocus(); requestAnimationFrame(syncSelectionState); }}
         onBlur={() => { setToolbarVisible(false); onActiveChange?.(false); }}
         onPointerDown={(event) => {
           if (event.button !== 0) return;
@@ -309,17 +360,17 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertT
         onInput={() => {
           inputEventCountRef.current += 1;
           emitChange();
-          syncActiveFormats();
+          syncSelectionState();
         }}
-        onKeyUp={syncActiveFormats}
-        onMouseUp={syncActiveFormats}
+        onKeyUp={syncSelectionState}
+        onMouseUp={syncSelectionState}
         onKeyDown={(event) => {
           if ((event.ctrlKey || event.metaKey) && ["b", "i", "u"].includes(event.key.toLowerCase())) {
             event.preventDefault();
             const commands = { b: "bold", i: "italic", u: "underline" } as const;
             document.execCommand(commands[event.key.toLowerCase() as keyof typeof commands]);
             emitChange();
-            syncActiveFormats();
+            syncSelectionState();
             return;
           }
           if (event.key === "Tab" && !(event.ctrlKey || event.metaKey) && selectionBlock()?.closest("li")) {

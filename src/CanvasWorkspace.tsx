@@ -1049,7 +1049,7 @@ export function CanvasWorkspace({
           const dimmed = Boolean(search.trim()) && !matchingIds.has(card.id);
           return (
             <article
-              className={`grid-card card-${card.type}${selected && !marqueeSelected && !sheetFocused ? " is-selected" : ""}${marqueeSelected ? " is-group-selected" : ""}${sheetFocused ? " sheet-focused-card" : ""}${dimmed ? " is-search-dimmed" : ""}`}
+              className={`grid-card card-${card.type}${selected && !marqueeSelected && !sheetFocused ? " is-selected" : ""}${marqueeSelected ? " is-group-selected" : ""}${sheetFocused ? " sheet-focused-card" : ""}${textEditing ? " text-editing-card" : ""}${dimmed ? " is-search-dimmed" : ""}`}
               style={cardSize(card)}
               key={card.id}
               onPointerDown={(event) => {
