@@ -1,6 +1,6 @@
 [package]
 name = "datagrid"
-version = "1.4.0"
+version = "2.0.1"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"

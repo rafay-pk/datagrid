@@ -547,8 +547,20 @@ fn output_message(output: &Output) -> String {
     if !stderr.is_empty() { stderr } else { stdout }
 }
 
+fn git_command() -> Command {
+    let mut command = Command::new("git");
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
+
 fn run_git(repository: &Path, arguments: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
+    let output = git_command()
         .args(arguments)
         .current_dir(repository)
         .output()
@@ -573,7 +585,7 @@ fn is_github_remote(remote: &str) -> bool {
 }
 
 fn git_status(repository: &Path, arguments: &[&str]) -> Result<Output, String> {
-    Command::new("git")
+    git_command()
         .args(arguments)
         .current_dir(repository)
         .output()
@@ -764,7 +776,7 @@ fn repository_status_blocking(repository: &Path) -> Result<RepositoryStatus, Str
 }
 
 fn git_status_owned(repository: &Path, arguments: &[String]) -> Result<Output, String> {
-    Command::new("git")
+    git_command()
         .args(arguments)
         .current_dir(repository)
         .output()
@@ -870,7 +882,7 @@ struct ImportedCanvasImage {
 
 #[tauri::command]
 fn git_environment() -> GitEnvironment {
-    match Command::new("git").arg("--version").output() {
+    match git_command().arg("--version").output() {
         Ok(output) if output.status.success() => GitEnvironment {
             available: true,
             version: Some(String::from_utf8_lossy(&output.stdout).trim().to_string()),
@@ -915,7 +927,7 @@ async fn connect_repository(folder: String, remote_url: Option<String>) -> Resul
             if has_entries {
                 return Err("Choose an empty folder for a new clone.".to_string());
             }
-            let output = Command::new("git")
+            let output = git_command()
                 .args(["clone", remote.trim(), "."])
                 .current_dir(&repository)
                 .output()
