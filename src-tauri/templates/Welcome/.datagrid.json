@@ -1,0 +1,165 @@
+{
+  "accent": "#FF4D4D",
+  "cards": [
+    {
+      "color": "#1C262B",
+      "createdAt": "2026-08-20T16:05:53.147Z",
+      "h": 1,
+      "id": "link-72425495-9a86-412d-b230-b2906e96f24f",
+      "preview": {
+        "description": "The cross-platform app building toolkit",
+        "domain": "v2.tauri.app",
+        "faviconAssetPath": "images/link-72425495-9a86-412d-b230-b2906e96f24f-favicon.ico",
+        "faviconUrl": "https://v2.tauri.app/favicon.ico",
+        "imageAssetPath": "images/link-72425495-9a86-412d-b230-b2906e96f24f-preview.png",
+        "imageUrl": "https://v2.tauri.app/og.png?v=1",
+        "siteName": "Tauri",
+        "title": "Tauri 2.0"
+      },
+      "type": "link",
+      "url": "https://v2.tauri.app/",
+      "w": 4,
+      "x": -5,
+      "y": -1
+    },
+    {
+      "blocks": [
+        {
+          "kind": "paragraph",
+          "runs": [
+            {
+              "text": "Every note lives on one big, infinite grid. Cards "
+            },
+            {
+              "italic": true,
+              "text": "*snap"
+            },
+            {
+              "text": " into place and "
+            },
+            {
+              "text": "~reflow",
+              "underline": true
+            },
+            {
+              "text": " as you move them around, no more overlapping notes."
+            }
+          ]
+        },
+        {
+          "kind": "ordered-item",
+          "level": 0,
+          "runs": [
+            {
+              "text": "Add a card"
+            }
+          ]
+        },
+        {
+          "kind": "ordered-item",
+          "level": 0,
+          "runs": [
+            {
+              "text": "Make it yours!"
+            }
+          ]
+        }
+      ],
+      "color": "#8AC926",
+      "createdAt": "2026-08-20T16:06:02.558Z",
+      "h": 3,
+      "html": "<div>Every note lives on one big, infinite grid. Cards <i>*snap</i> into place and <u>~reflow</u> as you move them around, no more overlapping notes.</div><ol><li>Add a card</li><ul class=\"checklist\"><li data-checked=\"false\"><span class=\"checklist-marker\" contenteditable=\"false\"></span>Press T for text, C for code, M for Image, S for Spreadsheet, L for link, F for file and K for shortcut</li><li data-checked=\"false\"><span class=\"checklist-marker\" contenteditable=\"false\"></span>Move it around ~ooo~</li></ul><li>Make it yours!</li><ul class=\"checklist\"><li data-checked=\"false\"><span class=\"checklist-marker\" contenteditable=\"false\"></span>Try a new font</li><li data-checked=\"false\"><span class=\"checklist-marker\" contenteditable=\"false\"></span>Switch between light and dark modes</li><li data-checked=\"false\"><span class=\"checklist-marker\" contenteditable=\"false\"></span>Pick an emoji to set the mood for your canvas</li><li data-checked=\"false\"><span class=\"checklist-marker\" contenteditable=\"false\"></span>Change the accent color of a card</li></ul></ol>",
+      "id": "text-fec74e91-b73a-45c7-8d89-fe2ad8ba2e78",
+      "title": "Welcome to DataGrid!",
+      "type": "text",
+      "w": 2,
+      "x": -5,
+      "y": 0
+    },
+    {
+      "code": "def power(base, exponent):\n    result = 1\n\n    while exponent:\n        if exponent & 1:\n            result *= base\n\n        base *= base\n        exponent >>= 1\n\n    return result",
+      "color": "#FB8500",
+      "createdAt": "2026-08-20T16:12:15.047Z",
+      "h": 2,
+      "id": "code-45b48b2d-c94a-47de-86ba-1167d3a2cead",
+      "language": "python",
+      "type": "code",
+      "w": 2,
+      "x": -3,
+      "y": 0
+    },
+    {
+      "color": "#FBBC04",
+      "columns": 4,
+      "createdAt": "2026-08-20T16:16:49.877Z",
+      "csvPath": "spreadsheets/sheet-b641b382-1971-46c2-816f-b0fdf1fd3cce.csv",
+      "h": 2,
+      "id": "sheet-b641b382-1971-46c2-816f-b0fdf1fd3cce",
+      "rows": 5,
+      "type": "spreadsheet",
+      "w": 2,
+      "x": 0,
+      "y": 0
+    },
+    {
+      "assetPath": "images/image-d812a4ba-6bdf-445a-80b2-55d83096ea48-image.png",
+      "color": "#5C2A1D",
+      "createdAt": "2026-08-20T16:19:06.584Z",
+      "fileName": "image.png",
+      "h": 1,
+      "id": "image-d812a4ba-6bdf-445a-80b2-55d83096ea48",
+      "label": "Rust Logo",
+      "mimeType": "image/png",
+      "naturalHeight": 512,
+      "naturalWidth": 512,
+      "type": "image",
+      "w": 1,
+      "x": -2,
+      "y": 2
+    },
+    {
+      "assetPath": "images/image-f6853174-ce12-4fe9-938b-a9bc8ab35d86-image.png",
+      "color": "#99DDCC",
+      "createdAt": "2026-08-20T16:19:14.934Z",
+      "fileName": "image.png",
+      "h": 1,
+      "id": "image-f6853174-ce12-4fe9-938b-a9bc8ab35d86",
+      "label": "NodeJS Logo",
+      "mimeType": "image/png",
+      "naturalHeight": 80,
+      "naturalWidth": 267,
+      "type": "image",
+      "w": 2,
+      "x": -1,
+      "y": -1
+    },
+    {
+      "assetPath": "images/image-b2d1eb99-2137-42d7-99a2-575a43576d49-image.png",
+      "color": "#00A896",
+      "createdAt": "2026-08-20T16:19:28.335Z",
+      "fileName": "image.png",
+      "h": 1,
+      "id": "image-b2d1eb99-2137-42d7-99a2-575a43576d49",
+      "label": "React Logo",
+      "mimeType": "image/png",
+      "naturalHeight": 1180,
+      "naturalWidth": 1280,
+      "type": "image",
+      "w": 1,
+      "x": 1,
+      "y": 2
+    }
+  ],
+  "createdAt": "1787241696",
+  "emoji": "🌱",
+  "font": "Figtree Variable",
+  "id": "canvas-dcc24752-1e77-4593-8c68-5b7ec13ad668",
+  "name": "Welcome",
+  "updatedAt": "2026-08-20T16:19:34.677Z",
+  "version": 1,
+  "viewport": {
+    "x": 36.77256418625416,
+    "y": -220.12811793056417,
+    "zoom": 0.8131393194811983
+  }
+}

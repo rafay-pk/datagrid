@@ -17,6 +17,33 @@ use uuid::Uuid;
 const CANVASES_FOLDER: &str = "canvases";
 const METADATA_FILE: &str = ".datagrid.json";
 const MARKDOWN_FILE: &str = "canvas.md";
+const WELCOME_TEMPLATE_FILES: &[(&str, &[u8])] = &[
+    ("canvas.md", include_bytes!("../templates/Welcome/canvas.md")),
+    (
+        "images/image-b2d1eb99-2137-42d7-99a2-575a43576d49-image.png",
+        include_bytes!("../templates/Welcome/images/image-b2d1eb99-2137-42d7-99a2-575a43576d49-image.png"),
+    ),
+    (
+        "images/image-d812a4ba-6bdf-445a-80b2-55d83096ea48-image.png",
+        include_bytes!("../templates/Welcome/images/image-d812a4ba-6bdf-445a-80b2-55d83096ea48-image.png"),
+    ),
+    (
+        "images/image-f6853174-ce12-4fe9-938b-a9bc8ab35d86-image.png",
+        include_bytes!("../templates/Welcome/images/image-f6853174-ce12-4fe9-938b-a9bc8ab35d86-image.png"),
+    ),
+    (
+        "images/link-72425495-9a86-412d-b230-b2906e96f24f-favicon.ico",
+        include_bytes!("../templates/Welcome/images/link-72425495-9a86-412d-b230-b2906e96f24f-favicon.ico"),
+    ),
+    (
+        "images/link-72425495-9a86-412d-b230-b2906e96f24f-preview.png",
+        include_bytes!("../templates/Welcome/images/link-72425495-9a86-412d-b230-b2906e96f24f-preview.png"),
+    ),
+    (
+        "spreadsheets/sheet-b641b382-1971-46c2-816f-b0fdf1fd3cce.csv",
+        include_bytes!("../templates/Welcome/spreadsheets/sheet-b641b382-1971-46c2-816f-b0fdf1fd3cce.csv"),
+    ),
+];
 static GIT_LOCK: Mutex<()> = Mutex::new(());
 static STORAGE_LOCK: Mutex<()> = Mutex::new(());
 
@@ -805,6 +832,36 @@ fn copy_asset_folder(source_canvas: &Path, destination_canvas: &Path, folder_nam
     Ok(())
 }
 
+fn seed_welcome_canvas(repository: &Path) -> Result<(), String> {
+    let canvases = repository.join(CANVASES_FOLDER);
+    fs::create_dir_all(&canvases).map_err(|error| error.to_string())?;
+    let already_has_canvas = fs::read_dir(&canvases)
+        .map_err(|error| error.to_string())?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .any(|path| path.is_dir() && path.join(METADATA_FILE).is_file());
+    if already_has_canvas {
+        return Ok(());
+    }
+
+    let welcome = canvases.join("Welcome");
+    for (relative, contents) in WELCOME_TEMPLATE_FILES {
+        write_atomic(&welcome.join(relative), contents)?;
+    }
+
+    let mut metadata: Value = serde_json::from_str(include_str!("../templates/Welcome/.datagrid.json"))
+        .map_err(|error| format!("The built-in Welcome canvas is invalid: {error}"))?;
+    let now = timestamp(SystemTime::now());
+    let document = metadata
+        .as_object_mut()
+        .ok_or("The built-in Welcome canvas metadata is not an object.")?;
+    document.insert("id".into(), Value::String(format!("canvas-{}", Uuid::new_v4())));
+    document.insert("createdAt".into(), Value::String(now.clone()));
+    document.insert("updatedAt".into(), Value::String(now));
+    let metadata = serde_json::to_vec_pretty(&metadata).map_err(|error| error.to_string())?;
+    write_atomic(&welcome.join(METADATA_FILE), &metadata)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ImportedCanvasImage {
@@ -826,6 +883,10 @@ fn git_environment() -> GitEnvironment {
 async fn connect_repository(folder: String, remote_url: Option<String>) -> Result<RepositoryConnection, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let repository = PathBuf::from(&folder);
+        let cloning_repository = remote_url
+            .as_ref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
         if remote_url.as_ref().map(|value| value.trim().is_empty()).unwrap_or(true) {
             let probe = git_status(&repository, &["rev-parse", "--show-toplevel"])?;
             if !probe.status.success() {
@@ -869,6 +930,9 @@ async fn connect_repository(folder: String, remote_url: Option<String>) -> Resul
         let remote = validate_repository(&repository)?;
         ensure_local_git_excludes(&repository)?;
         fs::create_dir_all(repository.join(CANVASES_FOLDER)).map_err(|error| error.to_string())?;
+        if cloning_repository {
+            seed_welcome_canvas(&repository)?;
+        }
         Ok(RepositoryConnection {
             folder,
             remote_url: remote,
