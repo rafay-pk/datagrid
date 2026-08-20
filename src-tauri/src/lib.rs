@@ -255,6 +255,15 @@ fn markdown_for_document(document: &Value, cards: &[Value]) -> String {
         match card.get("type").and_then(Value::as_str).unwrap_or("text") {
             "text" => {
                 output.push_str(&format!("\n<!-- card:{id} type:text -->\n\n"));
+                if let Some(title) = card
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|title| !title.is_empty())
+                {
+                    let title = title.replace(['\r', '\n'], " ");
+                    output.push_str(&format!("## {title}\n\n"));
+                }
                 let html = card.get("html").and_then(Value::as_str).unwrap_or("");
                 output.push_str(html);
                 output.push('\n');

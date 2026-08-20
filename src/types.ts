@@ -33,6 +33,7 @@ interface CardBase extends GridRect {
 
 export interface TextCard extends CardBase {
   type: "text";
+  title?: string;
   html: string;
   blocks: TextBlock[];
 }

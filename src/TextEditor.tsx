@@ -3,14 +3,15 @@ import { blocksFromHtml, normalizeUrl } from "./textFormat";
 import { convertClipboardContent } from "./clipboardFormat";
 import type { ClipboardImage } from "./clipboardFormat";
 import type { TextBlock } from "./types";
-import { BoldIcon, BulletListIcon, ChecklistIcon, CodeIcon, ItalicIcon, NumberedListIcon, UnderlineIcon } from "./icons";
+import { BoldIcon, BulletListIcon, ChecklistIcon, ItalicIcon, NumberedListIcon, TextIcon, UnderlineIcon } from "./icons";
 
 interface TextEditorProps {
+  title: string;
   html: string;
+  onTitleChange: (title: string) => void;
   onChange: (html: string, blocks: TextBlock[]) => void;
   onFocus: () => void;
   onActiveChange?: (active: boolean) => void;
-  onConvertToCode: () => void;
   onPasteLinks: (links: string[]) => void;
   onPasteImages: (files: File[], images: ClipboardImage[]) => void;
   onMeasure: (metrics: {
@@ -146,8 +147,10 @@ function toggleChecklist(editor: HTMLElement): void {
   }
 }
 
-export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertToCode, onPasteLinks, onPasteImages, onMeasure }: TextEditorProps) {
+export function TextEditor({ title, html, onTitleChange, onChange, onFocus, onActiveChange, onPasteLinks, onPasteImages, onMeasure }: TextEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
   const measureFrameRef = useRef<number | null>(null);
   const inputEventCountRef = useRef(0);
   const onMeasureRef = useRef(onMeasure);
@@ -168,6 +171,43 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertT
       italic: document.queryCommandState("italic"),
       underline: document.queryCommandState("underline"),
     });
+  };
+
+  const syncToolbarPosition = () => {
+    const editor = editorRef.current;
+    const toolbar = toolbarRef.current;
+    const card = editor?.closest<HTMLElement>(".grid-card");
+    const selection = window.getSelection();
+    const focusNode = selection?.focusNode;
+    if (!editor || !toolbar || !card || !selection || !focusNode || (focusNode !== editor && !editor.contains(focusNode))) return;
+
+    const caretRange = document.createRange();
+    caretRange.setStart(focusNode, selection.focusOffset);
+    caretRange.collapse(true);
+    const caretRect = caretRange.getClientRects()[0];
+    const cardRect = card.getBoundingClientRect();
+    if (!cardRect.height) return;
+
+    const scale = cardRect.height / card.offsetHeight;
+    const blockRect = selectionBlock()?.getBoundingClientRect();
+    const lineHeight = Number.parseFloat(window.getComputedStyle(editor).lineHeight) * scale;
+    const caretCenter = caretRect
+      ? caretRect.top + (caretRect.height || lineHeight) / 2
+      : (blockRect?.top ?? cardRect.top) + Math.min(blockRect?.height ?? lineHeight, lineHeight) / 2;
+    const desiredTop = (caretCenter - cardRect.top) / scale;
+    const toolbarHalf = toolbar.offsetHeight / 2;
+    const edgeGap = 4;
+    const minTop = toolbarHalf + edgeGap;
+    const maxTop = card.clientHeight - toolbarHalf - edgeGap;
+    const nextTop = maxTop < minTop
+      ? card.clientHeight / 2
+      : Math.min(Math.max(desiredTop, minTop), maxTop);
+    toolbar.style.top = `${Math.round(nextTop * 10) / 10}px`;
+  };
+
+  const syncSelectionState = () => {
+    syncActiveFormats();
+    syncToolbarPosition();
   };
 
   const measure = () => {
@@ -194,10 +234,10 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertT
     const contentHeight = Math.ceil(Math.max(clone.scrollHeight, clone.getBoundingClientRect().height));
     clone.remove();
     onMeasureRef.current({
-      scrollHeight: contentHeight,
+      scrollHeight: contentHeight + (headerRef.current?.offsetHeight ?? 0),
       clientHeight: editor.clientHeight,
-      maxLineLength: Math.max(0, ...lines.map((line) => line.length)),
-      lineCount: lines.length,
+      maxLineLength: Math.max(title.length, 0, ...lines.map((line) => line.length)),
+      lineCount: lines.length + (title ? 1 : 0),
     });
   };
 
@@ -221,7 +261,10 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertT
   useLayoutEffect(() => {
     const editor = editorRef.current;
     if (!editor) return;
-    const observer = new ResizeObserver(() => measure());
+    const observer = new ResizeObserver(() => {
+      measure();
+      syncToolbarPosition();
+    });
     observer.observe(editor);
     return () => observer.disconnect();
   }, []);
@@ -231,13 +274,17 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertT
   }, []);
 
   useEffect(() => {
-    document.addEventListener("selectionchange", syncActiveFormats);
-    return () => document.removeEventListener("selectionchange", syncActiveFormats);
+    document.addEventListener("selectionchange", syncSelectionState);
+    return () => document.removeEventListener("selectionchange", syncSelectionState);
   }, []);
 
   useLayoutEffect(() => {
+    if (toolbarVisible) syncToolbarPosition();
+  }, [toolbarVisible]);
+
+  useLayoutEffect(() => {
     measure();
-  }, [html]);
+  }, [html, title]);
 
   const emitChange = () => {
     const editor = editorRef.current;
@@ -251,7 +298,7 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertT
     editorRef.current?.focus({ preventScroll: true });
     document.execCommand(command);
     emitChange();
-    syncActiveFormats();
+    syncSelectionState();
   };
 
   const runChecklistToggle = () => {
@@ -269,13 +316,39 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertT
     const block = selectionBlock();
     document.execCommand("formatBlock", false, block?.tagName === "H2" ? "div" : "h2");
     emitChange();
-    syncActiveFormats();
+    syncSelectionState();
   };
 
   return (
-    <>
+    <div className="text-card-content">
+      <div ref={headerRef} className="card-header text-card-header">
+        <TextIcon size={15}/>
+        <label className="text-card-title-field">
+          <input
+            value={title}
+            aria-label="Text card title"
+            placeholder="Title"
+            onChange={(event) => onTitleChange(event.currentTarget.value)}
+            onFocus={() => { onActiveChange?.(true); onFocus(); }}
+            onBlur={() => onActiveChange?.(false)}
+            onPointerDown={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              editorRef.current?.focus({ preventScroll: true });
+            }}
+          />
+        </label>
+        <span className="card-header-drag-region" aria-hidden="true" />
+      </div>
       {toolbarVisible && (
-        <div className="text-toolbar" role="toolbar" aria-label="Text formatting" onMouseDown={(event) => event.preventDefault()}>
+        <div
+          ref={toolbarRef}
+          className="text-toolbar"
+          role="toolbar"
+          aria-label="Text formatting"
+          onMouseDown={(event) => event.preventDefault()}
+        >
           <button type="button" className={activeFormats.heading ? "active" : ""} aria-label="Heading" aria-pressed={activeFormats.heading} title="Heading (# )" onClick={runHeadingToggle}><span className="text-toolbar-glyph" aria-hidden="true">#</span></button>
           <span className="text-toolbar-divider"/>
           <button type="button" className={activeFormats.bold ? "active" : ""} aria-pressed={activeFormats.bold} title="Bold (Ctrl+B)" onClick={() => runCommand("bold")}><BoldIcon size={14}/></button>
@@ -285,8 +358,6 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertT
           <button type="button" title="Bulleted list" onClick={() => runCommand("insertUnorderedList")}><BulletListIcon size={14}/></button>
           <button type="button" title="Numbered list" onClick={() => runCommand("insertOrderedList")}><NumberedListIcon size={14}/></button>
           <button type="button" title="Checklist" onClick={runChecklistToggle}><ChecklistIcon size={14}/></button>
-          <span className="text-toolbar-divider"/>
-          <button type="button" title="Convert to code card" aria-label="Convert to code card" onClick={onConvertToCode}><CodeIcon size={14}/></button>
         </div>
       )}
       <div
@@ -298,7 +369,7 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertT
         suppressContentEditableWarning
         data-placeholder="Write something…"
         spellCheck
-        onFocus={() => { setToolbarVisible(true); onActiveChange?.(true); onFocus(); requestAnimationFrame(syncActiveFormats); }}
+        onFocus={() => { setToolbarVisible(true); onActiveChange?.(true); onFocus(); requestAnimationFrame(syncSelectionState); }}
         onBlur={() => { setToolbarVisible(false); onActiveChange?.(false); }}
         onPointerDown={(event) => {
           if (event.button !== 0) return;
@@ -309,17 +380,17 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertT
         onInput={() => {
           inputEventCountRef.current += 1;
           emitChange();
-          syncActiveFormats();
+          syncSelectionState();
         }}
-        onKeyUp={syncActiveFormats}
-        onMouseUp={syncActiveFormats}
+        onKeyUp={syncSelectionState}
+        onMouseUp={syncSelectionState}
         onKeyDown={(event) => {
           if ((event.ctrlKey || event.metaKey) && ["b", "i", "u"].includes(event.key.toLowerCase())) {
             event.preventDefault();
             const commands = { b: "bold", i: "italic", u: "underline" } as const;
             document.execCommand(commands[event.key.toLowerCase() as keyof typeof commands]);
             emitChange();
-            syncActiveFormats();
+            syncSelectionState();
             return;
           }
           if (event.key === "Tab" && !(event.ctrlKey || event.metaKey) && selectionBlock()?.closest("li")) {
@@ -404,6 +475,6 @@ export function TextEditor({ html, onChange, onFocus, onActiveChange, onConvertT
           }
         }}
       />
-    </>
+    </div>
   );
 }

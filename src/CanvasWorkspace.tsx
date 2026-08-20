@@ -25,7 +25,7 @@ import { TextEditor } from "./TextEditor";
 import { CodeEditor } from "./CodeEditor";
 import { convertClipboardContent } from "./clipboardFormat";
 import type { ClipboardImage } from "./clipboardFormat";
-import { blocksFromHtml, looksTabular, normalizeUrl, parseTable, plainTextFromBlocks, trimTrailingEmptyLines } from "./textFormat";
+import { blocksFromHtml, extractTextTitle, looksTabular, normalizeUrl, parseTable, plainTextFromBlocks, trimTrailingEmptyLines } from "./textFormat";
 import {
   CARD_COLORS,
   GRID_GAP,
@@ -38,6 +38,7 @@ import {
   type ImageCard,
   type LinkCard,
   type SpreadsheetCard as SpreadsheetCardType,
+  type TextBlock,
   type TextCard,
   type Tool,
 } from "./types";
@@ -174,11 +175,28 @@ async function imageDataUrlToOriginalBlob(dataUrl: string, mimeType: string): Pr
 function cardMatchesSearch(card: CanvasCard, query: string): boolean {
   if (!query.trim()) return true;
   const needle = query.toLowerCase();
-  if (card.type === "text") return plainTextFromBlocks(card.blocks).toLowerCase().includes(needle);
+  if (card.type === "text") return textCardPlainText(card).toLowerCase().includes(needle);
   if (card.type === "code") return `${card.language} ${card.code}`.toLowerCase().includes(needle);
   if (card.type === "spreadsheet") return card.cells.flat().join(" ").toLowerCase().includes(needle);
   if (card.type === "image") return `${card.label ?? ""} ${card.fileName}`.toLowerCase().includes(needle);
   return `${card.url} ${card.preview.title} ${card.preview.description}`.toLowerCase().includes(needle);
+}
+
+function normalizedTextCard(card: TextCard): { title: string; html: string; blocks: TextBlock[] } {
+  if (card.title !== undefined) {
+    return {
+      title: card.title,
+      html: card.html,
+      blocks: card.blocks.length ? card.blocks : blocksFromHtml(card.html),
+    };
+  }
+  const content = extractTextTitle(card.html);
+  return { ...content, blocks: blocksFromHtml(content.html) };
+}
+
+function textCardPlainText(card: TextCard): string {
+  const content = normalizedTextCard(card);
+  return [content.title.trim(), plainTextFromBlocks(content.blocks)].filter(Boolean).join("\n");
 }
 
 function htmlFromPlainText(value: string): string {
@@ -341,6 +359,7 @@ export function CanvasWorkspace({
   };
 
   const addText = (origin?: { x: number; y: number }, html = "", width = 1, placement?: CreationPlacement) => {
+    const content = extractTextTitle(html);
     const card: Omit<TextCard, "x" | "y"> = {
       id: createId("text"),
       type: "text",
@@ -348,8 +367,9 @@ export function CanvasWorkspace({
       h: placement?.rect.h ?? 1,
       color: placement?.color ?? nextCardColor(),
       createdAt: new Date().toISOString(),
-      html,
-      blocks: blocksFromHtml(html),
+      title: content.title,
+      html: content.html,
+      blocks: blocksFromHtml(content.html),
     };
     return placeCard<TextCard>(card, origin, placement);
   };
@@ -533,7 +553,7 @@ export function CanvasWorkspace({
   const deleteCard = (id: string) => deleteCards(new Set([id]));
 
   const convertTextToCode = (card: TextCard) => {
-    const code = trimTrailingEmptyLines(plainTextFromBlocks(card.blocks.length ? card.blocks : blocksFromHtml(card.html)));
+    const code = trimTrailingEmptyLines(textCardPlainText(card));
     const next: CodeCard = {
       id: card.id,
       type: "code",
@@ -561,6 +581,7 @@ export function CanvasWorkspace({
       h: card.h,
       color: card.color,
       createdAt: card.createdAt,
+      title: "",
       html,
       blocks: blocksFromHtml(html),
     };
@@ -571,7 +592,7 @@ export function CanvasWorkspace({
   const copyCardToClipboard = async (card: CanvasCard) => {
     try {
       if (card.type === "text") {
-        await navigator.clipboard.writeText(plainTextFromBlocks(card.blocks));
+        await navigator.clipboard.writeText(textCardPlainText(card));
       } else if (card.type === "code") {
         await navigator.clipboard.writeText(card.code);
       } else if (card.type === "link") {
@@ -1038,9 +1059,10 @@ export function CanvasWorkspace({
           const textEditing = card.id === editingTextId;
           const imageLabelEditing = card.id === editingImageLabelId;
           const dimmed = Boolean(search.trim()) && !matchingIds.has(card.id);
+          const textContent = card.type === "text" ? normalizedTextCard(card) : null;
           return (
             <article
-              className={`grid-card card-${card.type}${selected && !marqueeSelected && !sheetFocused ? " is-selected" : ""}${marqueeSelected ? " is-group-selected" : ""}${sheetFocused ? " sheet-focused-card" : ""}${dimmed ? " is-search-dimmed" : ""}`}
+              className={`grid-card card-${card.type}${selected && !marqueeSelected && !sheetFocused ? " is-selected" : ""}${marqueeSelected ? " is-group-selected" : ""}${sheetFocused ? " sheet-focused-card" : ""}${textEditing ? " text-editing-card" : ""}${dimmed ? " is-search-dimmed" : ""}`}
               style={cardSize(card)}
               key={card.id}
               onPointerDown={(event) => {
@@ -1072,7 +1094,9 @@ export function CanvasWorkspace({
                   }}
                 />
               )}
-              <div className={`card-hover-tools${sheetFocused || textEditing ? " hidden" : ""}`}>
+              <div className={`card-hover-tools${sheetFocused ? " hidden" : ""}`}>
+                {card.type === "text" && <button className="card-tool card-convert-tool code-tool" title="Convert to code card" aria-label="Convert to code card" onClick={(event) => { event.stopPropagation(); convertTextToCode(card); }}><CodeIcon size={16}/></button>}
+                {card.type === "code" && <button className="card-tool card-convert-tool text-tool" title="Convert to text card" aria-label="Convert to text card" onClick={(event) => { event.stopPropagation(); convertCodeToText(card); }}><TextIcon size={16}/></button>}
                 <button className="card-tool" title="Copy" onClick={(event) => { event.stopPropagation(); void copyCardToClipboard(card); }}>{copiedCardId === card.id ? <CheckIcon size={16}/> : <CopyIcon size={16}/>}</button>
                 <button className="card-tool" title="Duplicate card" onClick={(event) => { event.stopPropagation(); duplicateCard(card); }}><DuplicateIcon size={16}/></button>
                 <button className="card-tool danger-tool" title="Delete card" onClick={(event) => { event.stopPropagation(); deleteCard(card.id); }}><TrashIcon size={16}/></button>
@@ -1080,13 +1104,18 @@ export function CanvasWorkspace({
 
               {card.type === "text" && (
                 <TextEditor
-                  html={card.html}
+                  title={textContent!.title}
+                  html={textContent!.html}
                   onFocus={() => setSelectedId(card.id)}
                   onActiveChange={(active) => setEditingTextId(active ? card.id : null)}
-                  onConvertToCode={() => convertTextToCode(card)}
+                  onTitleChange={(title) => updateCard(card.id, (current) => {
+                    if (current.type !== "text") return current;
+                    const content = normalizedTextCard(current);
+                    return { ...current, title, html: content.html, blocks: content.blocks };
+                  })}
                   onPasteLinks={(links) => addLinksBesideCard(card, links)}
                   onPasteImages={(files, images) => { void addPastedImagesAbove(card, files, images); }}
-                  onChange={(html, blocks) => updateCard(card.id, (current) => current.type === "text" ? { ...current, html, blocks } : current)}
+                  onChange={(html, blocks) => updateCard(card.id, (current) => current.type === "text" ? { ...current, title: normalizedTextCard(current).title, html, blocks } : current)}
                   onMeasure={(metrics) => handleTextMeasure(card.id, metrics)}
                 />
               )}
@@ -1098,7 +1127,6 @@ export function CanvasWorkspace({
                   onActiveChange={(active) => setEditingTextId(active ? card.id : null)}
                   onChange={(code) => updateCard(card.id, (current) => current.type === "code" ? { ...current, code } : current)}
                   onLanguageChange={(language) => updateCard(card.id, (current) => current.type === "code" ? { ...current, language } : current)}
-                  onConvertToText={() => convertCodeToText(card)}
                   onMeasure={(metrics) => handleCodeMeasure(card.id, metrics)}
                 />
               )}
